@@ -1,0 +1,15 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "潜行绮遇 · 本地游戏",
+			"type": "shell",
+			"command": "node",
+			"args": [
+				"server.mjs"
+			],
+			"isBackground": true,
+			"problemMatcher": []
+		}
+	]
+}

@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#081820">
+  <meta name="description" content="驾驶潜艇，探索五层深海。捕获奇妙生物、改造基因、升级舰队，在像素海洋里发现未知。">
+  <title>潜行绮遇 · Dive Into Wonder</title>
+  <link rel="icon" href="./favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+  <header class="site-header">
+    <a class="brand" href="#explore" aria-label="潜行绮遇，返回探索"><span class="brand-mark" aria-hidden="true"><i></i><b></b></span><span><strong>潜行绮遇<span class="brand-dot">.</span></strong><small>DIVE INTO WONDER</small></span></a>
+    <nav class="main-nav" aria-label="主要导航">
+      <button class="nav-item active" data-view="explore"><span data-icon="compass"></span>深海探索</button>
+      <button class="nav-item" data-view="hangar"><span data-icon="ship"></span>载具船坞</button>
+      <button class="nav-item" data-view="research"><span data-icon="dna"></span>基因实验室</button>
+      <button class="nav-item" data-view="codex"><span data-icon="book"></span>深海图鉴<span class="nav-counter" id="codex-count">0</span></button>
+    </nav>
+    <div class="header-wallet"><span class="currency" title="信用点"><span data-icon="coin"></span><b id="credits">0</b></span><span class="currency research-currency" title="科研点"><span data-icon="flask"></span><b id="research-points">0</b></span><button class="avatar" id="level-button" title="查看航行记录">01</button></div>
+  </header>
+
+  <main>
+    <div class="page-intro">
+      <div><div class="eyebrow"><span class="status-dot"></span> THE OCEAN IS CALLING</div><h1 id="page-title">向未知，下潜<span>。</span></h1><p id="page-subtitle">有些奇遇，只有潜下去才会发生。</p></div>
+      <div class="intro-right"><span class="expedition-label">探索航次 <b id="dive-number">001</b></span><div class="utility-buttons"><button id="sound-button" class="icon-button" title="开启声音" aria-label="开启声音"><span data-icon="mute"></span></button><button id="help-button" class="icon-button" title="操作指南" aria-label="操作指南"><span data-icon="help"></span></button><button id="pause-button" class="icon-button" title="暂停游戏" aria-label="暂停游戏"><span data-icon="pause"></span></button></div></div>
+    </div>
+
+    <section id="explore-view" class="view active-view" aria-label="深海探索">
+      <div class="game-layout">
+        <div class="game-shell">
+          <div class="ocean-stage" id="ocean-stage">
+            <canvas id="ocean" tabindex="0" aria-label="深海游戏画面，WASD或方向键移动，E捕获，Q声呐，Shift加速，R返航"></canvas>
+            <div class="scene-vignette"></div>
+            <div class="zone-overlay">
+              <div class="zone-label"><span id="zone-index">01</span><span id="zone-name">日光带</span><span class="tiny-diamond">◆</span></div>
+              <div class="depth-reading"><strong id="depth-value">100</strong><span>m</span></div>
+              <div class="depth-caption">当前深度 <span id="zone-english">SUNLIGHT ZONE</span></div>
+              <div class="coordinates" id="coordinates">N 21° 06′ · E 142° 48′</div>
+            </div>
+            <div class="vehicle-hud glass">
+              <div class="hud-ship"><span class="status-dot"></span><b id="vehicle-name">萤火虫号</b><span id="vehicle-tag">SCOUT</span></div>
+              <div class="meter-label"><span><span data-icon="battery"></span>电量</span><b id="battery-value">100<span>%</span></b></div><div class="meter"><i id="battery-bar"></i></div>
+              <div class="meter-label"><span><span data-icon="box"></span>舱内负载</span><b id="cargo-value">0 <em>/ 24 kg</em></b></div><div class="meter cargo-meter"><i id="cargo-bar"></i></div>
+              <div class="pressure-status" id="pressure-status"><span class="status-dot"></span>船体稳定<span id="pressure-limit">耐压 600 m</span></div>
+            </div>
+            <div class="zone-announcement" id="zone-announcement"><small>ENTERING A NEW WORLD</small><strong></strong><p></p></div>
+            <div class="mission-card glass" id="mission-card"><div class="mission-top"><span class="mission-icon" data-icon="flag"></span><span>航行委托</span><span class="mission-count" id="mission-count">01 / 03</span></div><strong id="mission-title">深海的第一份礼物</strong><p id="mission-description">捕获你的第一只海洋生物</p><div class="mission-progress-row"><div class="meter"><i id="mission-bar"></i></div><span id="mission-progress">0 / 3</span></div><button id="claim-mission" class="mission-claim" hidden>领取奖励 <span>↗</span></button></div>
+            <div class="target-prompt" id="target-prompt"><kbd>E</kbd><span>靠近生物，即可捕获</span></div>
+            <div class="scene-signature"><span class="live-dot"></span>LIVE FEED<span class="signal-bars">▂▄▆</span></div>
+            <div class="screen-state" id="screen-state" hidden><div class="screen-state-content"><span data-icon="anchor"></span><small id="state-eyebrow">WELCOME HOME</small><h2 id="state-title">已返回浮岛基地</h2><p id="state-description">补满电量，准备下一次奇遇。</p><button class="primary-button" id="state-action">再次下潜 <span>↓</span></button><button class="text-button" id="state-secondary">前往载具船坞 ↗</button></div></div>
+            <div class="touch-controls" aria-label="触屏方向控制"><button data-direction="up" aria-label="上移">↑</button><div><button data-direction="left" aria-label="左移">←</button><button data-direction="down" aria-label="下移">↓</button><button data-direction="right" aria-label="右移">→</button></div></div>
+          </div>
+          <div class="action-dock">
+            <div class="movement-hint"><span class="key-cluster"><kbd>W</kbd><span><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd></span></span><span>驾驶潜艇<small>方向键亦可</small></span></div>
+            <div class="main-actions"><button class="action-button capture-button" id="capture-button"><span data-icon="crosshair"></span><span>捕获 / 采集</span><kbd>E</kbd></button><button class="action-button" id="sonar-button"><span data-icon="radar"></span><span id="sonar-label">声呐探测</span><kbd>Q</kbd></button><button class="action-button deploy-button" id="deploy-button" hidden><span data-icon="ship"></span><span>部署子艇</span><kbd>F</kbd></button></div>
+            <div class="secondary-actions"><span class="boost-hint"><kbd>SHIFT</kbd>加速</span><button id="return-button" class="return-button"><span data-icon="anchor"></span>返航<kbd>R</kbd></button></div>
+          </div>
+        </div>
+        <aside class="depth-track" aria-label="海洋深度分层"><div class="track-heading">深度<span>DEPTH</span></div><div class="depth-zones" id="depth-zones"><div class="depth-line"></div><div class="depth-marker" id="depth-marker"></div><div class="depth-zone active" data-zone="0"><span class="zone-tick">0</span><i></i><b>日光带</b></div><div class="depth-zone" data-zone="1"><span class="zone-tick">200</span><i></i><b>暮光带</b></div><div class="depth-zone" data-zone="2"><span class="zone-tick">1,000</span><i></i><b>午夜带</b></div><div class="depth-zone" data-zone="3"><span class="zone-tick">4,000</span><i></i><b>深渊带</b></div><div class="depth-zone" data-zone="4"><span class="zone-tick">6,000</span><i></i><b>冥渊带</b></div><span class="depth-bottom">11,000 m</span></div><div class="depth-bottom-icon" data-icon="waves"></div></aside>
+      </div>
+      <div class="expedition-strip">
+        <div class="journey-level"><span class="level-badge" id="level-badge">01</span><div><div class="strip-label">探索者等级 <b id="rank-name">新晋潜航员</b></div><div class="xp-row"><div class="meter"><i id="xp-bar"></i></div><span id="xp-label">0 / 100 XP</span></div></div></div>
+        <div class="expedition-stats"><div><span>本次捕获</span><strong id="trip-captures">00<small>只</small></strong></div><div><span>最深足迹</span><strong id="record-depth">100<small>m</small></strong></div><div><span>已识生物</span><strong id="species-count">00<small>/ 20</small></strong></div></div>
+        <button class="discovery-teaser" id="discovery-teaser"><span class="teaser-symbol">✧</span><span><small>未知，值得期待</small><b id="discovery-teaser-text">下一个奇遇，就在更深处</b></span><span class="teaser-arrow">↗</span></button>
+      </div>
+    </section>
+    <section id="hangar-view" class="view content-view" aria-label="载具船坞" hidden></section>
+    <section id="research-view" class="view content-view" aria-label="基因实验室" hidden></section>
+    <section id="codex-view" class="view content-view" aria-label="深海图鉴" hidden></section>
+    <footer class="page-footer"><span><span class="status-dot"></span>航行记录自动保存于本机</span><span>保持好奇。海底总有新的答案。<span class="footer-star">✦</span></span><button id="log-button">航行手册 ↗</button></footer>
+  </main>
+  <div class="toast-stack" id="toast-stack" role="status" aria-live="polite"></div>
+  <dialog id="modal"><div id="modal-content"></div><button class="modal-close icon-button" id="modal-close" aria-label="关闭弹窗"><span data-icon="close"></span></button></dialog>
+  <script type="module" src="./app.js"></script>
+</body>
+</html>
