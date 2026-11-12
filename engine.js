@@ -1,4 +1,5 @@
-import { ZONES, SPECIES, VEHICLES, GENES, UPGRADES, WONDERS } from './data.js';
+import { ZONES, SPECIES, VEHICLES, GENES, UPGRADES, WONDERS, PAINTS } from './data.js';
+import { CAVES, HOTSPOTS, getCaveAt, hasLineOfSight, moveWithCollision, wallX } from './world.js';
 
 const SAVE_KEY = 'dive-into-wonder-v1';
 const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
@@ -28,7 +29,7 @@ export class Game {
   }
 
   initialize() {
-    this.player = { x: 490, y: 100, facing: 1 };
+    this.player = { x: 490, y: 100, facing: 1, heading: { x: 1, y: 0 } };
     this.vehicle = 'moth';
     this.battery = VEHICLES.moth.battery;
     this.hull = 100;
@@ -46,6 +47,17 @@ export class Game {
     this.sonar = { remaining: 0, cooldown: 0 };
     this.boost = false;
     this.carrier = null;
+    this.abilityCooldowns = { moth: 0, ray: 0, whale: 0 };
+    this.dashRemaining = 0;
+    this.detectedHotspots = {};
+    this.caveDiscoveries = [];
+    this.unlockedPaints = ['classic'];
+    this.paintByVehicle = { moth: 'classic', ray: 'classic', whale: 'classic' };
+    this.sampleStock = {};
+    this.labState = null;
+    this.labProcessed = 0;
+    this.labRuns = 0;
+    this.labBestCombo = 0;
     this.expedition = { captures: 0, alloy: 0, credits: 0, research: 0, startDepth: 100, deepest: 100, duration: 0 };
     this.lastExpedition = null;
     this.totalCaptures = 0;
@@ -74,11 +86,11 @@ export class Game {
 
   get stats() {
     const vehicle = VEHICLES[this.vehicle];
-    const mothership = this.carrier ? VEHICLES.whale : vehicle;
+    const pressureVehicle = this.tetherConnected ? VEHICLES.whale : vehicle;
     return {
-      maxDepth: mothership.maxDepth + this.upgrades.hull * 900,
+      maxDepth: pressureVehicle.maxDepth + this.upgrades.hull * 900,
       battery: vehicle.battery + this.upgrades.battery * 65,
-      cargo: mothership.cargo + this.upgrades.cargo * 8 + (this.researched.includes('elastic') ? 10 : 0),
+      cargo: vehicle.cargo + this.upgrades.cargo * 8 + (this.researched.includes('elastic') ? 10 : 0),
       speed: vehicle.speed * (1 + this.upgrades.thruster * 0.15) * (this.researched.includes('streamline') ? 1.15 : 1),
       vision: vehicle.vision * (this.researched.includes('lumen') ? 1.3 : 1),
       captureRange: vehicle.captureRange * (this.researched.includes('echo') ? 1.25 : 1),
@@ -90,11 +102,52 @@ export class Game {
   get xpToNextLevel() { return 60 + (this.level - 1) * 35; }
   get batteryPercent() { return clamp(this.battery / this.stats.battery * 100, 0, 100); }
   get deployed() { return Boolean(this.carrier); }
+  get tetherDistance() { return this.carrier ? Math.hypot(this.player.x - this.carrier.x, this.player.y - this.carrier.y) : 0; }
+  get tetherConnected() { return Boolean(this.carrier && this.tetherDistance <= this.carrier.tetherRange); }
+  get currentCave() { return getCaveAt(this.player.x, this.player.y); }
+  get paintId() { return this.paintByVehicle[this.vehicle] ?? 'classic'; }
+  get visibility() {
+    const depth = this.player.y;
+    const ambientRadius = depth < 200 ? 640 : depth < 1000 ? 105 : depth < 4000 ? 52 : 38;
+    return { ambientRadius, beamRange: this.stats.vision * (depth >= 4000 ? 0.82 : 1), beamCos: 0.68, sonarRadius: this.sonar.remaining > 0 ? this.sonar.radius ?? 650 : 0 };
+  }
+
+  isEntityVisible(entity) {
+    if (!entity || entity.alive === false) return false;
+    const dx = entity.x - this.player.x;
+    const dy = entity.y - this.player.y;
+    const distance = Math.hypot(dx, dy);
+    const visibility = this.visibility;
+    const targetAmbient = entity.y < 200 ? 640 : entity.y < 1000 ? 105 : entity.y < 4000 ? 52 : 38;
+    const heading = this.player.heading ?? { x: this.player.facing, y: 0 };
+    const illuminated = distance <= Math.min(visibility.ambientRadius, targetAmbient)
+      || distance <= visibility.beamRange && (dx * heading.x + dy * heading.y) / Math.max(1, distance) >= visibility.beamCos;
+    if (!illuminated && (entity.scannedUntil ?? 0) <= this.elapsed) return false;
+    return hasLineOfSight(this.player.x, this.player.y, entity.x, entity.y);
+  }
+
+  get contacts() {
+    return HOTSPOTS.filter(spot => (this.detectedHotspots[spot.id] ?? 0) > this.elapsed)
+      .map(spot => ({ ...spot, expiresAt: this.detectedHotspots[spot.id], distance: Math.hypot(spot.x - this.player.x, spot.y - this.player.y) }))
+      .sort((a, b) => a.distance - b.distance);
+  }
+
+  get activeAbility() {
+    const abilities = {
+      moth: { name: '窄域冲刺', description: '消耗 10 电量，2 秒灵巧冲刺。萤蛾号可通过洞穴狭口。' },
+      ray: { name: '生物断层扫描', description: '消耗 12 电量，标记附近 3 份生物样本，采集后额外获得科研点。' },
+      whale: { name: '连锁破岩', description: '消耗 15 电量，开采前方 3 处岩壁矿脉，矿物产出提高。' },
+    };
+    const cooldown = this.abilityCooldowns[this.vehicle] ?? 0;
+    return { ...abilities[this.vehicle], cooldown, ready: !this.docked && !this.paused && cooldown <= 0 };
+  }
+
   get nearestTarget() {
     let nearest = null;
     let best = this.stats.captureRange;
     for (const entity of this.entities) {
-      if (!entity.alive) continue;
+      if (!entity.alive || !this.isEntityVisible(entity)) continue;
+      if (entity.caveId && (this.vehicle !== 'moth' || this.currentCave?.id !== entity.caveId)) continue;
       const distance = Math.hypot(entity.x - this.player.x, entity.y - this.player.y);
       if (distance < best) { nearest = entity; best = distance; }
     }
@@ -119,28 +172,47 @@ export class Game {
   spawnWorld() {
     this.entities = [];
     let seed = 37 + this.totalDives * 103;
+    const creatureCounts = [14, 15, 19, 10, 24];
+    const addCreature = (species, x, y, extra = {}) => {
+      this.entities.push({ id: `e${this.entitySequence++}`, type: 'creature', speciesId: species.id, x, y, originX: x, originY: y, phase: this.random(seed++) * Math.PI * 2, alive: true, size: species.size, color: species.color, scannedUntil: 0, ...extra });
+    };
+    const addMineral = (side, y, amount, extra = {}) => {
+      const anchorX = wallX(side);
+      const x = anchorX + (side === 'left' ? 12 : -12);
+      this.entities.push({ id: `e${this.entitySequence++}`, type: 'mineral', material: 'alloy', x, y, originX: x, originY: y, alive: true, amount, size: 13, attachment: { side, anchorX, anchorY: y }, scannedUntil: 0, ...extra });
+    };
     for (const [zoneIndex, zone] of ZONES.entries()) {
       const species = SPECIES.filter(item => item.zone === zone.id);
-      const count = zoneIndex === 0 ? 12 : Math.ceil((zone.max - zone.min) / 55);
-      for (let i = 0; i < count; i++) {
+      const spots = HOTSPOTS.filter(spot => spot.y >= zone.min && spot.y < zone.max);
+      for (let i = 0; i < creatureCounts[zoneIndex]; i++) {
         const creature = species[i % species.length];
-        const y = zone.min + 30 + this.random(seed++) * (zone.max - zone.min - 55);
-        const x = 135 + this.random(seed++) * 730;
-        this.entities.push({ id: `e${this.entitySequence++}`, type: 'creature', speciesId: creature.id, x, y, originX: x, originY: y, phase: this.random(seed++) * Math.PI * 2, alive: true, size: creature.size, color: creature.color });
+        const spot = spots[i % spots.length];
+        // Deep life clusters around energy sources, leaving long, quiet passages.
+        const y = zoneIndex < 2
+          ? zone.min + 32 + this.random(seed++) * (zone.max - zone.min - 64)
+          : clamp(spot.y + (this.random(seed++) - 0.5) * 260, zone.min + 30, zone.max - 30);
+        const x = zoneIndex < 2 ? 150 + this.random(seed++) * 700 : clamp(spot.x + (this.random(seed++) - 0.5) * 260, 150, 850);
+        addCreature(creature, x, y, { hotspotId: spot.id });
       }
-      const mineralCount = zoneIndex === 0 ? 7 : Math.ceil((zone.max - zone.min) / 120);
+      const mineralCount = [5, 7, 8, 5, 8][zoneIndex];
       for (let i = 0; i < mineralCount; i++) {
-        const x = 160 + this.random(seed++) * 680;
-        const y = zone.min + 35 + this.random(seed++) * (zone.max - zone.min - 60);
-        this.entities.push({ id: `e${this.entitySequence++}`, type: 'mineral', material: 'alloy', x, y, originX: x, originY: y, alive: true, amount: zoneIndex + 2, size: 13 });
+        const spot = spots[i % spots.length];
+        const y = zoneIndex < 2 ? zone.min + 35 + this.random(seed++) * (zone.max - zone.min - 70) : clamp(spot.y + (this.random(seed++) - 0.5) * 250, zone.min + 25, zone.max - 25);
+        addMineral(i % 2 ? 'right' : 'left', y, zoneIndex + 2, { hotspotId: spot.id });
       }
     }
-    // An immediately readable first dive: each core interaction is within reach.
+    // The shallow tutorial supplies samples; ore is always attached to real rock.
     for (const [speciesId, x, y] of [['glassfish', 550, 105], ['emberfin', 410, 165], ['moonjelly', 600, 190], ['ribbon_eel', 500, 275], ['lanternfish', 620, 380]]) {
-      const species = speciesById[speciesId];
-      this.entities.push({ id: `e${this.entitySequence++}`, type: 'creature', speciesId, x, y, originX: x, originY: y, phase: 0, alive: true, size: species.size, color: species.color });
+      addCreature(speciesById[speciesId], x, y);
     }
-    this.entities.push({ id: `e${this.entitySequence++}`, type: 'mineral', material: 'alloy', x: 450, y: 245, originX: 450, originY: 245, alive: true, amount: 3, size: 13 });
+    addMineral('left', 245, 3);
+    for (const [index, cave] of CAVES.entries()) {
+      const x = (cave.bounds.left + cave.bounds.right) / 2;
+      const species = speciesById[['umbrella_octopus', 'crystal_jelly', 'siphonophore'][index]];
+      addCreature(species, x, cave.y - 35, { caveId: cave.id, hotspotId: cave.id, drift: 5, researchBonus: 15 + index * 20, sampleCondition: 'pristine' });
+      const y = cave.bounds.bottom - 12;
+      this.entities.push({ id: `e${this.entitySequence++}`, type: 'mineral', material: 'alloy', x, y, originX: x, originY: y, alive: true, amount: 5 + index * 5, size: 15, caveId: cave.id, hotspotId: cave.id, scannedUntil: 0, attachment: { side: 'floor', anchorX: x, anchorY: cave.bounds.bottom } });
+    }
   }
 
   update(dt, input = {}) {
@@ -151,26 +223,32 @@ export class Game {
     this.expedition.duration += delta;
     this.captureCooldown = Math.max(0, this.captureCooldown - delta);
     this.warningCooldown = Math.max(0, this.warningCooldown - delta);
+    this.dashRemaining = Math.max(0, this.dashRemaining - delta);
+    for (const id of Object.keys(this.abilityCooldowns)) this.abilityCooldowns[id] = Math.max(0, this.abilityCooldowns[id] - delta);
     this.sonar.remaining = Math.max(0, this.sonar.remaining - delta);
     this.sonar.cooldown = Math.max(0, this.sonar.cooldown - delta);
+    if (this.sonar.remaining > 0) this.sonar.waveRadius = Math.min(this.sonar.radius, (this.sonar.duration - this.sonar.remaining) * 900);
     const stats = this.stats;
     const x = clamp(Number(input.x) || 0, -1, 1);
     const y = clamp(Number(input.y) || 0, -1, 1);
     const length = Math.hypot(x, y) || 1;
     const moving = x !== 0 || y !== 0;
     this.boost = Boolean(input.boost && moving && this.battery > 3);
-    const speed = stats.speed * (this.boost ? 1.8 : 1);
-    this.player.x = clamp(this.player.x + x / Math.max(1, length) * speed * delta, 85, 915);
-    this.player.y = clamp(this.player.y + y / Math.max(1, length) * speed * delta, 12, 10980);
+    const speed = stats.speed * (this.dashRemaining > 0 ? 2.2 : this.boost ? 1.8 : 1);
+    const tetherWasConnected = this.tetherConnected;
+    moveWithCollision(this.player, x / Math.max(1, length) * speed * delta, y / Math.max(1, length) * speed * delta, this.vehicle);
     if (x !== 0) this.player.facing = x > 0 ? 1 : -1;
+    if (moving) this.player.heading = { x: x / length, y: y / length };
+    if (tetherWasConnected && !this.tetherConnected) this.emit('warning', '脐带保护中断', '距母舰超过 500 米，恢复萤蛾号自身耐压上限。返回母舰附近可重新连接。');
     this.maxDepth = Math.max(this.maxDepth, Math.floor(this.player.y));
     this.expedition.deepest = Math.max(this.expedition.deepest, Math.floor(this.player.y));
-    const pressure = Math.max(0, (this.player.y - stats.maxDepth) / 700);
+    const safeDepth = this.stats.maxDepth;
+    const pressure = Math.max(0, (this.player.y - safeDepth) / 700);
     const consumption = (moving ? 0.85 : 0.28) * (this.researched.includes('metabolism') ? 0.75 : 1) + (this.boost ? 1.4 : 0) + pressure * 0.9;
     this.battery = Math.max(0, this.battery - consumption * delta);
     this.hull = clamp(this.hull - pressure * 5 * delta + (!pressure && this.researched.includes('repair') ? delta : 0), 0, 100);
     if (pressure > 0 && this.warningCooldown <= 0) {
-      this.emit('warning', '超过安全深度', `当前艇壳额定 ${stats.maxDepth.toLocaleString()} 米。请上浮或返回港口升级。`);
+      this.emit('warning', '超过安全深度', `当前艇壳额定 ${safeDepth.toLocaleString()} 米。请上浮、靠近母舰或返回港口升级。`);
       this.warningCooldown = 14;
     } else if (this.batteryPercent < 20 && this.warningCooldown <= 0) {
       this.emit('warning', '电量不足 20%', '按 R 安全返航，所有收获都会保留。');
@@ -182,13 +260,18 @@ export class Game {
     }
     for (const entity of this.entities) {
       if (!entity.alive || entity.type !== 'creature' || Math.abs(entity.y - this.player.y) > 1100) continue;
-      entity.x = entity.originX + Math.sin(this.elapsed * 0.42 + entity.phase) * 27;
-      entity.y = entity.originY + Math.cos(this.elapsed * 0.3 + entity.phase) * 9;
+      const drift = entity.drift ?? 27;
+      entity.x = entity.originX + Math.sin(this.elapsed * 0.42 + entity.phase) * drift;
+      entity.y = entity.originY + Math.cos(this.elapsed * 0.3 + entity.phase) * Math.min(drift, 9);
       entity.facing = Math.cos(this.elapsed * 0.42 + entity.phase) > 0 ? 1 : -1;
     }
-    for (const wonder of this.wonders) {
-      if (!wonder.discovered && Math.hypot(wonder.x - this.player.x, wonder.y - this.player.y) < stats.vision + (this.sonar.remaining > 0 ? 180 : 0)) this.discoverWonder(wonder);
+    for (const hotspot of HOTSPOTS) {
+      if (this.isEntityVisible(hotspot)) this.detectedHotspots[hotspot.id] = this.elapsed + 20;
     }
+    for (const wonder of this.wonders) {
+      if (!wonder.discovered && this.isEntityVisible(wonder)) this.discoverWonder(wonder);
+    }
+    if (this.currentCave && this.vehicle === 'moth') this.discoverCave(this.currentCave);
     this.refreshMissions();
     this.autosaveTimer += delta;
     if (this.autosaveTimer >= 12) { this.autosaveTimer = 0; this.save(); }
@@ -199,26 +282,38 @@ export class Game {
     if (this.docked || this.paused || this.captureCooldown > 0) return false;
     const entity = this.nearestTarget;
     if (!entity) { this.emit('info', '靠近一点', '将载具开到生物或矿物附近，再按 E 采集。'); return false; }
+    return this.collectEntity(entity);
+  }
+
+  collectEntity(entity, { miningMultiplier = this.vehicle === 'whale' ? 1.5 : 1, energyCost = 2 } = {}) {
+    if (!entity?.alive || !this.isEntityVisible(entity)) return false;
+    if (entity.caveId && (this.vehicle !== 'moth' || this.currentCave?.id !== entity.caveId)) return false;
     const species = entity.type === 'creature' ? speciesById[entity.speciesId] : null;
     const weight = species?.weight ?? 1;
     if (this.cargoWeight + weight > this.stats.cargo) { this.emit('warning', '样本舱已满', '按 R 返航结算，或升级样本舱以增加负载。'); return false; }
-    if (this.battery < 2) { this.emit('warning', '采集电量不足', '按 R 返回港口补给。'); return false; }
-    this.captureCooldown = 0.45;
-    this.battery = Math.max(0, this.battery - 2);
+    if (this.carrier) {
+      const storedWeight = this.carrier.cargo.reduce((sum, item) => sum + (item.weight ?? 1) * (item.count ?? 1), 0);
+      const carrierCapacity = VEHICLES.whale.cargo + this.upgrades.cargo * 8 + (this.researched.includes('elastic') ? 10 : 0);
+      if (storedWeight + this.cargoWeight + weight > carrierCapacity) { this.emit('warning', '母舰仓储容量不足', '母舰与探索艇的总载重已达上限，请返航卸载。'); return false; }
+    }
+    if (this.battery < energyCost) { this.emit('warning', '采集电量不足', '按 R 返回港口补给。'); return false; }
+    this.captureCooldown = species ? 0.45 : this.vehicle === 'whale' ? 0.2 : 0.85;
+    this.battery = Math.max(0, this.battery - energyCost);
     entity.alive = false;
     if (species) {
-      this.cargo.push({ speciesId: species.id, count: 1, weight, value: species.value, research: species.research });
+      const initialResearch = Math.max(1, Math.floor(species.research * 0.2)) + (entity.researchBonus ?? 0);
+      this.cargo.push({ speciesId: species.id, count: 1, weight, value: species.value, research: initialResearch, researchBonus: entity.researchBonus ?? 0, sampleCondition: entity.sampleCondition ?? 'fresh' });
       this.expedition.captures++;
       this.expedition.credits += species.value;
-      this.expedition.research += species.research;
+      this.expedition.research += initialResearch;
       this.totalCaptures++;
       this.captureCounts[species.id] = (this.captureCounts[species.id] ?? 0) + 1;
       const isNew = !this.discoveries.includes(species.id);
       if (isNew) this.discoveries.push(species.id);
       this.addXp(species.xp + (isNew ? 18 : 0));
-      this.emit(isNew ? 'discovery' : 'capture', isNew ? `新发现 · ${species.name}` : `采集成功 · ${species.name}`, `+${species.value} 信用点 · +${species.research} 科研点（返航结算）`, { speciesId: species.id, entityId: entity.id, x: entity.x, y: entity.y });
+      this.emit(isNew ? 'discovery' : 'capture', isNew ? `新发现 · ${species.name}` : `采集成功 · ${species.name}`, `+${species.value} 信用点 · +${initialResearch} 初检科研点。返航后可在科研值班中处理样本。`, { speciesId: species.id, entityId: entity.id, x: entity.x, y: entity.y, sampleCondition: entity.sampleCondition ?? 'fresh' });
     } else {
-      const amount = entity.amount ?? 2;
+      const amount = Math.ceil((entity.amount ?? 2) * miningMultiplier);
       this.cargo.push({ material: 'alloy', count: 1, weight: 1, amount });
       this.expedition.alloy += amount;
       this.totalAlloy += amount;
@@ -236,10 +331,89 @@ export class Game {
     const cost = this.vehicle === 'ray' ? 4 : 8;
     if (this.battery < cost) { this.emit('warning', '声呐电量不足', '返回港口即可补充电量。'); return false; }
     this.battery -= cost;
-    this.sonar.remaining = 4;
+    this.sonar.duration = this.vehicle === 'ray' ? 8 : 4;
+    this.sonar.remaining = this.sonar.duration;
+    this.sonar.radius = this.vehicle === 'ray' ? 1150 : 650;
+    this.sonar.origin = { x: this.player.x, y: this.player.y };
+    this.sonar.waveRadius = 0;
     this.sonar.cooldown = this.researched.includes('echo') ? 6 : 12;
-    const found = this.entities.filter(entity => entity.alive && Math.hypot(entity.x - this.player.x, entity.y - this.player.y) < 650).length;
-    this.emit('sonar', '声呐脉冲已释放', `附近探测到 ${found} 个生命与矿物信号。`);
+    let found = 0;
+    for (const entity of this.entities) {
+      if (entity.alive && Math.hypot(entity.x - this.player.x, entity.y - this.player.y) <= this.sonar.radius) {
+        entity.scannedUntil = this.elapsed + this.sonar.duration;
+        found++;
+      }
+    }
+    const contactRadius = this.vehicle === 'ray' ? 3000 : 2000;
+    for (const hotspot of HOTSPOTS) {
+      if (Math.hypot(hotspot.x - this.player.x, hotspot.y - this.player.y) <= contactRadius) this.detectedHotspots[hotspot.id] = this.elapsed + (this.vehicle === 'ray' ? 35 : 22);
+    }
+    const waypoint = this.contacts.find(contact => contact.y > this.player.y + 100) ?? this.contacts[0];
+    this.emit('sonar', '声呐脉冲已释放', `附近探测到 ${found} 个生命与矿物信号。${waypoint ? `生态回波：${waypoint.name}，${Math.round(waypoint.y).toLocaleString()} 米。` : '这片水域十分安静，继续向深处探测。'}`);
+    return true;
+  }
+
+  useAbility() {
+    if (!this.activeAbility.ready) return false;
+    const cost = { moth: 10, ray: 12, whale: 15 }[this.vehicle];
+    if (this.battery < cost) { this.emit('warning', '专长电量不足', `需要 ${cost} 电量。`); return false; }
+    if (this.vehicle === 'moth') {
+      this.battery -= cost;
+      this.dashRemaining = 2;
+      this.abilityCooldowns.moth = 10;
+      this.emit('ability', '窄域冲刺', '2 秒高机动推进。岩壁会阻挡冲刺，请沿洞喉进入。');
+    } else if (this.vehicle === 'ray') {
+      const targets = this.entities.filter(entity => entity.alive && entity.type === 'creature' && !entity.caveId && !entity.biologicalScan && Math.hypot(entity.x - this.player.x, entity.y - this.player.y) <= 320 && hasLineOfSight(this.player.x, this.player.y, entity.x, entity.y))
+        .sort((a, b) => Math.hypot(a.x - this.player.x, a.y - this.player.y) - Math.hypot(b.x - this.player.x, b.y - this.player.y)).slice(0, 3);
+      if (!targets.length) { this.emit('info', '扫描范围内没有新样本', '靠近生物群落，断层扫描可标记 320 米内的生物。'); return false; }
+      this.battery -= cost;
+      this.abilityCooldowns.ray = 12;
+      for (const entity of targets) {
+        entity.biologicalScan = true;
+        entity.sampleCondition = 'scanned';
+        entity.researchBonus = Math.ceil(speciesById[entity.speciesId].research * 0.65);
+        entity.scannedUntil = this.elapsed + 16;
+      }
+      this.emit('ability', '生物断层扫描完成', `${targets.length} 份高精度样本已标记。采集后可获得额外科研点。`);
+    } else {
+      const targets = this.entities.filter(entity => entity.alive && entity.type === 'mineral' && !entity.caveId && entity.attachment && this.isEntityVisible(entity) && Math.hypot(entity.x - this.player.x, entity.y - this.player.y) <= 210)
+        .sort((a, b) => Math.hypot(a.x - this.player.x, a.y - this.player.y) - Math.hypot(b.x - this.player.x, b.y - this.player.y)).slice(0, Math.min(3, Math.floor(this.stats.cargo - this.cargoWeight)));
+      if (!targets.length) { this.emit('info', '请靠近岩壁矿脉', '重型钻机需要 210 米内可见的矿物，以及空余样本舱。'); return false; }
+      this.battery -= cost;
+      this.abilityCooldowns.whale = 14;
+      const before = this.expedition.alloy;
+      for (const entity of targets) this.collectEntity(entity, { miningMultiplier: 2.5, energyCost: 0 });
+      this.emit('ability', '连锁破岩完成', `${targets.length} 处矿脉 · +${this.expedition.alloy - before} 合金。`);
+    }
+    this.save();
+    return true;
+  }
+
+  discoverCave(cave) {
+    if (!cave || this.caveDiscoveries.includes(cave.id)) return false;
+    this.caveDiscoveries.push(cave.id);
+    this.resources.credits += 120;
+    this.addXp(75);
+    this.emit('cave', `洞穴发现 · ${cave.name}`, '狭口后的安静世界。珍稀样本和岩层矿物就在洞穴内部。');
+    if (cave.rewardSkin) this.unlockPaint(cave.rewardSkin);
+    this.save();
+    return true;
+  }
+
+  unlockPaint(id) {
+    const paint = PAINTS.find(item => item.id === id);
+    if (!paint || this.unlockedPaints.includes(id)) return false;
+    this.unlockedPaints.push(id);
+    this.emit('cosmetic', `新涂装 · ${paint.name}`, '已加入永久收藏，在载具工坊中可免费更换。');
+    this.save();
+    return true;
+  }
+
+  equipPaint(vehicleId, paintId) {
+    if (!this.docked || !this.ownedVehicles.includes(vehicleId) || !this.unlockedPaints.includes(paintId) || !PAINTS.some(paint => paint.id === paintId)) return false;
+    this.paintByVehicle[vehicleId] = paintId;
+    this.emit('cosmetic', '涂装已更换', `${VEHICLES[vehicleId].name} · ${PAINTS.find(paint => paint.id === paintId).name}`);
+    this.save();
     return true;
   }
 
@@ -268,12 +442,15 @@ export class Game {
 
   returnToBase(emergency = false) {
     if (this.docked) return false;
-    this.lastExpedition = { ...this.expedition, emergency, species: [...new Set(this.cargo.filter(item => item.speciesId).map(item => item.speciesId))] };
+    const allCargo = [...this.cargo, ...(this.carrier?.cargo ?? [])];
+    this.settleSamples(allCargo);
+    this.lastExpedition = { ...this.expedition, emergency, species: [...new Set(allCargo.filter(item => item.speciesId).map(item => item.speciesId))] };
     this.resources.credits += this.expedition.credits;
     this.resources.research += this.expedition.research;
     this.resources.alloy += this.expedition.alloy;
     if (this.carrier) this.vehicle = 'whale';
     this.carrier = null;
+    this.dashRemaining = 0;
     this.cargo = [];
     this.docked = true;
     this.paused = false;
@@ -290,15 +467,27 @@ export class Game {
     return true;
   }
 
+  settleSamples(cargo) {
+    if (!Array.isArray(cargo)) return;
+    for (const item of cargo) {
+      if (!item || !speciesById[item.speciesId]) continue;
+      const count = Number.isFinite(item.count) ? clamp(Math.floor(item.count), 0, 1000) : 1;
+      this.sampleStock[item.speciesId] = (this.sampleStock[item.speciesId] ?? 0) + count;
+    }
+  }
+
   launch() {
     if (!this.docked) return false;
     this.docked = false;
     this.paused = false;
-    this.player = { x: 490, y: 100, facing: 1 };
+    this.player = { x: 490, y: 100, facing: 1, heading: { x: 1, y: 0 } };
     this.battery = this.stats.battery;
     this.hull = 100;
     this.expedition = { captures: 0, alloy: 0, credits: 0, research: 0, startDepth: 100, deepest: 100, duration: 0 };
     this.sonar = { remaining: 0, cooldown: 0 };
+    this.abilityCooldowns = { moth: 0, ray: 0, whale: 0 };
+    this.dashRemaining = 0;
+    this.detectedHotspots = {};
     this.previousZone = this.zone.id;
     this.captureCooldown = 0;
     this.warningCooldown = 0;
@@ -354,7 +543,7 @@ export class Game {
     const gene = GENES.find(item => item.id === id);
     if (!gene || this.researched.includes(id)) return false;
     if (!this.discoveries.includes(gene.speciesId)) { this.emit('info', '尚未取得研究样本', `先采集一份${speciesById[gene.speciesId].name}。`); return false; }
-    if (this.resources.research < gene.cost) { this.emit('warning', '科研点不足', `需要 ${gene.cost} 科研点，返航即可结算本次科研收获。`); return false; }
+    if (this.resources.research < gene.cost) { this.emit('warning', '科研点不足', `需要 ${gene.cost} 科研点。返回基地，在科研值班中处理样本可获得更多。`); return false; }
     this.resources.research -= gene.cost;
     this.researched.push(id);
     this.addXp(70);
@@ -367,22 +556,25 @@ export class Game {
   deploySub() {
     if (this.docked || this.paused) return false;
     if (this.carrier) {
-      if (Math.hypot(this.player.x - this.carrier.x, this.player.y - this.carrier.y) > 320) { this.emit('info', '请靠近母舰', `返回 ${Math.round(this.carrier.y).toLocaleString()} 米处的鲸落号，320 米内可重新接驳。`); return false; }
-      const battery = this.carrier.battery;
+      if (this.tetherDistance > 120 || !hasLineOfSight(this.player.x, this.player.y, this.carrier.x, this.carrier.y)) { this.emit('info', '请靠近母舰', `返回 ${Math.round(this.carrier.y).toLocaleString()} 米处的鲸落号，在通视的 120 米内重新接驳。`); return false; }
+      const battery = this.carrier.battery + this.battery;
+      this.cargo = [...this.carrier.cargo, ...this.cargo];
       this.player.x = this.carrier.x;
       this.player.y = this.carrier.y;
       this.vehicle = 'whale';
       this.carrier = null;
-      this.battery = Math.max(0, battery - 8);
-      this.emit('vehicle', '接驳完成', '欢迎回到鲸落号，样本舱已同步。');
+      this.battery = clamp(battery - 4, 0, this.stats.battery);
+      this.emit('vehicle', '接驳完成', '样本已转入母舰；剩余电量回流，共消耗 4 电量完成接驳。');
     } else {
       if (this.vehicle !== 'whale') { this.emit('info', '需要鲸落号母舰', '建造鲸落号后，可以在深海释放萤蛾号探索艇。'); return false; }
-      if (this.battery < 18) { this.emit('warning', '母舰电量不足', '请回港充电后再释放探索艇。'); return false; }
-      this.carrier = { x: this.player.x, y: this.player.y, vehicle: 'whale', battery: this.battery - 10 };
+      if (this.battery < 30) { this.emit('warning', '母舰电量不足', '请回港充电后再释放探索艇。'); return false; }
+      const transferred = Math.min(VEHICLES.moth.battery + this.upgrades.battery * 65, Math.floor((this.battery - 8) * 0.4));
+      this.carrier = { x: this.player.x, y: this.player.y, vehicle: 'whale', battery: this.battery - transferred - 8, cargo: this.cargo, tetherRange: 500 };
+      this.cargo = [];
       this.vehicle = 'moth';
-      this.battery = this.stats.battery;
-      this.player.x = clamp(this.player.x + 80, 85, 915);
-      this.emit('vehicle', '萤蛾号已释放', '共享母舰耐压保护与样本舱。靠近母舰后按 F 接驳。');
+      this.battery = transferred;
+      moveWithCollision(this.player, this.player.facing * 55, 0, 'moth');
+      this.emit('vehicle', '萤蛾号已释放', `已从母舰转移 ${transferred} 电量。500 米内享有耐压保护；带回样本，在 120 米内按 F 接驳。`);
     }
     this.save();
     return true;
@@ -408,6 +600,7 @@ export class Game {
     if (!mission || mission.progress < mission.target) return false;
     for (const [resource, amount] of Object.entries(mission.reward)) this.resources[resource] += amount;
     this.missionTiers[id]++;
+    if (id === 'depth' && mission.target >= 5000) this.unlockPaint('abyss');
     this.addXp(50);
     this.emit('mission', `委托完成 · ${mission.title}`, `+${mission.reward.credits} 信用点 · +${mission.reward.alloy} 合金 · +${mission.reward.research} 科研点`);
     this.refreshMissions();
@@ -439,13 +632,16 @@ export class Game {
   save() {
     if (!this.storage) return false;
     const data = {
-      version: 1, player: this.player, vehicle: this.vehicle, battery: this.battery, hull: this.hull,
+      version: 2, player: this.player, vehicle: this.vehicle, battery: this.battery, hull: this.hull,
       cargo: this.cargo, resources: this.resources, level: this.level, xp: this.xp, maxDepth: this.maxDepth,
       discoveries: this.discoveries, researched: this.researched, ownedVehicles: this.ownedVehicles,
       upgrades: this.upgrades, docked: this.docked, expedition: this.expedition, lastExpedition: this.lastExpedition,
       totalCaptures: this.totalCaptures, totalDives: this.totalDives, totalAlloy: this.totalAlloy,
       captureCounts: this.captureCounts, collectionTier: this.collectionTier, missionTiers: this.missionTiers,
       wonderIds: this.wonders.filter(wonder => wonder.discovered).map(wonder => wonder.id), carrier: this.carrier,
+      sampleStock: this.sampleStock, labState: this.labState, labProcessed: this.labProcessed,
+      labRuns: this.labRuns, labBestCombo: this.labBestCombo, caveDiscoveries: this.caveDiscoveries,
+      unlockedPaints: this.unlockedPaints, paintByVehicle: this.paintByVehicle,
     };
     try { this.storage.setItem(SAVE_KEY, JSON.stringify(data)); return true; }
     catch {
@@ -458,7 +654,7 @@ export class Game {
     if (!this.storage) return false;
     try {
       const data = JSON.parse(this.storage.getItem(SAVE_KEY));
-      if (!data || data.version !== 1 || !VEHICLES[data.vehicle] || !data.resources) return false;
+      if (!data || ![1, 2].includes(data.version) || !VEHICLES[data.vehicle] || !data.resources) return false;
       const finite = (value, fallback, min = 0, max = 1e9) => typeof value === 'number' && Number.isFinite(value) ? clamp(value, min, max) : fallback;
       const ids = (values, allowed) => Array.isArray(values) ? [...new Set(values.filter(value => allowed.includes(value)))] : [];
       this.ownedVehicles = ids(data.ownedVehicles, Object.keys(VEHICLES));
@@ -478,6 +674,23 @@ export class Game {
       for (const id of ['depth', 'capture', 'research']) this.missionTiers[id] = Math.floor(finite(data.missionTiers?.[id], 0, 0, id === 'depth' ? depthMilestones.length : id === 'research' ? GENES.length : 10000));
       this.captureCounts = {};
       for (const species of SPECIES) this.captureCounts[species.id] = Math.floor(finite(data.captureCounts?.[species.id], 0));
+      this.sampleStock = {};
+      for (const species of SPECIES) {
+        const count = Math.floor(finite(data.sampleStock?.[species.id], 0, 0, 100000));
+        if (count) this.sampleStock[species.id] = count;
+      }
+      this.labState = data.labState && typeof data.labState === 'object' && !Array.isArray(data.labState) ? JSON.parse(JSON.stringify(data.labState)) : null;
+      this.labProcessed = Math.floor(finite(data.labProcessed, 0));
+      this.labRuns = Math.floor(finite(data.labRuns, 0));
+      this.labBestCombo = Math.floor(finite(data.labBestCombo, 0));
+      this.caveDiscoveries = ids(data.caveDiscoveries, CAVES.map(cave => cave.id));
+      this.unlockedPaints = ids(data.unlockedPaints, PAINTS.map(paint => paint.id));
+      if (!this.unlockedPaints.includes('classic')) this.unlockedPaints.unshift('classic');
+      // Reconstruct earned cosmetics for older saves without removing progression.
+      if (this.labProcessed >= 10 && !this.unlockedPaints.includes('aurora')) this.unlockedPaints.push('aurora');
+      if (this.missionTiers.depth >= 5 && !this.unlockedPaints.includes('abyss')) this.unlockedPaints.push('abyss');
+      if (this.caveDiscoveries.includes('coral_hollow') && !this.unlockedPaints.includes('coral')) this.unlockedPaints.push('coral');
+      for (const vehicleId of Object.keys(VEHICLES)) this.paintByVehicle[vehicleId] = this.unlockedPaints.includes(data.paintByVehicle?.[vehicleId]) ? data.paintByVehicle[vehicleId] : 'classic';
       const foundWonders = ids(data.wonderIds, WONDERS.map(wonder => wonder.id));
       this.wonders = WONDERS.map(wonder => ({ ...wonder, discovered: foundWonders.includes(wonder.id) }));
       // Reload resumes at a fully supplied port and safely settles the saved dive.
@@ -485,6 +698,8 @@ export class Game {
       const wasDiving = data.docked === false;
       if (wasDiving) {
         for (const key of ['credits', 'research', 'alloy']) this.resources[key] += finite(data.expedition?.[key], 0);
+        this.settleSamples(data.cargo);
+        this.settleSamples(data.carrier?.cargo);
         this.totalDives++;
       }
       this.lastExpedition = wasDiving ? { captures: finite(data.expedition?.captures, 0), credits: finite(data.expedition?.credits, 0), research: finite(data.expedition?.research, 0), alloy: finite(data.expedition?.alloy, 0), deepest: finite(data.expedition?.deepest, 100), duration: finite(data.expedition?.duration, 0), emergency: false, resumed: true, species: [] } : data.lastExpedition ?? null;
@@ -492,7 +707,7 @@ export class Game {
       this.carrier = null;
       this.cargo = [];
       this.expedition = { captures: 0, alloy: 0, credits: 0, research: 0, startDepth: 100, deepest: 100, duration: 0 };
-      this.player = { x: 490, y: 35, facing: 1 };
+      this.player = { x: 490, y: 35, facing: 1, heading: { x: 1, y: 0 } };
       this.docked = true;
       this.battery = this.stats.battery;
       this.hull = 100;

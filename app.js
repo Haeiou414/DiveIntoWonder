@@ -1,7 +1,9 @@
 import { Game } from './engine.js';
-import { ZONES, SPECIES, VEHICLES, GENES, UPGRADES, WONDERS } from './data.js';
+import { ZONES, SPECIES, VEHICLES, GENES, UPGRADES, WONDERS, PAINTS } from './data.js';
 import { OceanRenderer, drawSpecimen, drawVehicle } from './renderer.js';
 import { Soundscape } from './audio.js';
+import { ResearchShift } from './research-shift.js';
+import { ResearchStationUI } from './research-view.js';
 
 const $ = id => document.getElementById(id);
 const icons = {
@@ -36,6 +38,15 @@ const esc = value => String(value).replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<
 const game = new Game();
 const renderer = new OceanRenderer($('ocean'));
 const audio = new Soundscape();
+const shift = new ResearchShift(game);
+const stationUI = new ResearchStationUI($('station-view'), shift, {
+  drawSpecimen,
+  returnPort: () => game.returnToBase(),
+  openExplore: () => setView('explore'),
+  openGenes: () => setView('research'),
+  openHangar: () => setView('hangar'),
+});
+shift.onChange = event => { if (view === 'station') stationUI.render(); if (event.sound) audio.play(event.sound); updateHUD(); };
 const keys = new Set();
 const touch = new Set();
 const modal = $('modal');
@@ -48,18 +59,25 @@ let hudElapsed = 0;
 let lastFrame = performance.now();
 let lastReady = false;
 const zoneEnglish = ['SUNLIGHT ZONE', 'TWILIGHT ZONE', 'MIDNIGHT ZONE', 'ABYSSAL ZONE', 'HADAL ZONE'];
-const viewTitles = { explore: ['向未知，下潜<span>。</span>', '有些奇遇，只有潜下去才会发生。'], hangar: ['让好奇，走更远<span>。</span>', '每一项改装，都是通往更深处的通行证。'], research: ['向生命，借一点灵感<span>。</span>', '海洋已经进化了亿万年。我们才刚刚开始学习。'], codex: ['把未知，变成相识<span>。</span>', '记住每一次相遇，收集属于你的整片海洋。'] };
+const viewTitles = { explore: ['向未知，下潜<span>。</span>', '有些奇遇，只有潜下去才会发生。'], station: ['让发现，生长<span>。</span>', '海底采集，基地科研。下一次远行，从这里开始。'], hangar: ['让好奇，走更远<span>。</span>', '钻洞、扫描、破矿与搭载：为这次任务选择你的伙伴。'], research: ['向生命，借一点灵感<span>。</span>', '用科研值班的成果，解锁改变探索方式的能力。'], codex: ['把未知，变成相识<span>。</span>', '记住每一次相遇，收集属于你的整片海洋。'] };
 
-function syncPause() { game.paused = manuallyPaused || view !== 'explore' || modal.open || document.hidden; }
+function syncPause() {
+  game.paused = manuallyPaused || view !== 'explore' || modal.open || document.hidden;
+  shift.paused = manuallyPaused || view !== 'station' || modal.open || document.hidden;
+  audio.setPaused(document.hidden);
+  audio.setScene(view === 'station' ? 'lab' : game.docked ? 'port' : 'dive');
+}
 function setView(next) {
   if (!viewTitles[next]) return;
   view = next;
+  document.body.dataset.view = next;
   keys.clear(); touch.clear();
   document.querySelectorAll('.view').forEach(el => { el.hidden = el.id !== `${next}-view`; });
   document.querySelectorAll('[data-view]').forEach(el => { const active = el.dataset.view === next; el.classList.toggle('active', active); el.setAttribute('aria-current', active ? 'page' : 'false'); });
   $('page-title').innerHTML = viewTitles[next][0];
   $('page-subtitle').textContent = viewTitles[next][1];
   renderView(); syncPause(); updateHUD();
+  window.scrollTo({ top: 0, behavior: 'instant' });
 }
 document.querySelectorAll('[data-view]').forEach(el => el.addEventListener('click', () => { audio.play('click'); setView(el.dataset.view); }));
 document.querySelector('.brand').addEventListener('click', event => { event.preventDefault(); setView('explore'); });
@@ -87,7 +105,7 @@ modal.addEventListener('close', syncPause);
 modal.addEventListener('click', event => { if (event.target === modal) { const rect = modal.getBoundingClientRect(); if (event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom) closeModal(); } });
 
 function showHelp() {
-  openModal(`<p class="modal-eyebrow">FIELD GUIDE / 01</p><h2 class="modal-title">你的深海第一课</h2><p class="modal-description">驾驶潜艇靠近闪光的生物和矿物，带回样本，让下一次下潜再深一点。</p><div class="help-grid"><span><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd></span><span>驾驶潜艇 · 也可使用方向键</span><span><kbd>E</kbd> / 点击捕获</span><span>捕获最近的生物 / 采集合金矿物</span><span><kbd>Q</kbd></span><span>发射声呐 · 短暂照亮更远的海域</span><span><kbd>SHIFT</kbd></span><span>加速推进 · 更快消耗电量</span><span><kbd>R</kbd></span><span>随时安全返航 · 结算样本并补满电量</span><span><kbd>F</kbd></span><span>鲸落号释放 / 接驳萤蛾号子艇</span><span><kbd>SPACE</kbd> / <kbd>ESC</kbd></span><span>暂停 / 继续航行</span></div><div class="help-note">不需要管理氧气或饥饿。只需留意电量、样本负载和耐压深度。完成委托可领取奖励；回港后建造、改装载具，科研解锁永久基因能力。触屏设备可使用画面左下角方向键。</div><div class="modal-footer"><span>离开页面会自动保存，重开时安全回港。</span><button class="primary-button" id="help-done">准备好了 ↓</button></div>`, () => $('help-done').addEventListener('click', closeModal));
+  openModal(`<p class="modal-eyebrow">FIELD GUIDE / 02</p><h2 class="modal-title">下潜与科研，两班生活。</h2><p class="modal-description">下潜带回样本，回港后切换「科研值班」操作培养、分析与报告三台设备。科研点用来融合基因，信用与合金用于改装舰队。</p><div class="help-grid"><span><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd></span><span>驾驶 · 方向键亦可，载具无法穿过岩壁</span><span><kbd>E</kbd></span><span>捕获可见生物 / 开采岩壁与洞底矿脉</span><span><kbd>Q</kbd></span><span>声呐：深海目标探测、地形回声和热点导航</span><span><kbd>V</kbd></span><span>专属能力：小艇冲刺 / 科研扫描 / 母舰破矿</span><span><kbd>F</kbd></span><span>鲸落号停在洞外，释放小艇后回到母舰接驳</span><span><kbd>R</kbd> / <kbd>SHIFT</kbd></span><span>安全返航 / 加速耗电</span><span><kbd>1</kbd><kbd>2</kbd><kbd>3</kbd></span><span>科研值班：温控或移交 / 光谱或移交 / 交付</span><span><kbd>SPACE</kbd> / <kbd>ESC</kbd></span><span>暂停或继续探索</span></div><div class="help-note">午夜带起，灯光外的生物无法直接锁定。Q 让远处信号暂时显现；空旷水层中沿热点提示航行。只有萤蛾号能穿过洞穴窄口。子艇需要在母舰 500 米支援范围内工作，接驳可以转移样本和剩余电量。音乐需要点击「开启音乐」。</div><div class="modal-footer"><span>工位状态自动保存，切换页面会暂停值班。</span><button class="primary-button" id="help-done">准备好了 ↓</button></div>`, () => $('help-done').addEventListener('click', closeModal));
 }
 $('help-button').addEventListener('click', showHelp);
 $('log-button').addEventListener('click', showHelp);
@@ -114,13 +132,15 @@ missionOpen.addEventListener('click', event => { event.stopPropagation(); showMi
 missionTop.append(missionOpen);
 
 function showReturn(expedition) {
-  openModal(`<p class="modal-eyebrow">EXPEDITION ${String(game.totalDives).padStart(3, '0')} / COMPLETE</p><h2 class="modal-title">${expedition.emergency ? '牵引完成，平安归来。' : '带着奇遇，回家。'}</h2><p class="modal-description">本次最深抵达 ${number(expedition.deepest)} 米，所有样本已安全入库。电池充满，艇壳已修复。</p><div class="summary-grid"><div><strong>+${number(expedition.credits)}</strong><span>信用点</span></div><div><strong>+${number(expedition.research)}</strong><span>科研点</span></div><div><strong>+${number(expedition.alloy)}</strong><span>合金</span></div></div><div class="help-note">采集 ${expedition.captures} 份生物样本 · 航行 ${Math.max(1, Math.round(expedition.duration))} 秒。用收获改装载具、研究基因，或继续完成新的航行委托。</div><div class="modal-footer"><button class="text-button" id="return-explore">补给完毕，再次下潜 ↓</button><button class="primary-button" id="return-hangar">进入船坞 ↗</button></div>`, () => {
+  openModal(`<p class="modal-eyebrow">EXPEDITION ${String(game.totalDives).padStart(3, '0')} / COMPLETE</p><h2 class="modal-title">${expedition.emergency ? '牵引完成，平安归来。' : '带着奇遇，回家。'}</h2><p class="modal-description">本次最深抵达 ${number(expedition.deepest)} 米，${expedition.captures} 份样本已存入科研冷藏库。电池充满，艇壳已修复。</p><div class="summary-grid"><div><strong>+${number(expedition.credits)}</strong><span>航行信用点</span></div><div><strong>+${number(expedition.research)}</strong><span>初步科研点</span></div><div><strong>+${number(expedition.alloy)}</strong><span>岩脉合金</span></div></div><div class="help-note">冷藏库现有 ${shift.availableSamples} 份样本。切换到科研值班，亲自培养、分析与交付，获得更多科研点、连续交付奖励与极光涂装。</div><div class="modal-footer return-choices"><button class="text-button" id="return-explore">再次下潜 ↓</button><button class="text-button" id="return-hangar">船坞改装 ↗</button><button class="primary-button" id="return-station">去科研值班 →</button></div>`, () => {
     $('return-explore').addEventListener('click', () => { closeModal(); manuallyPaused = false; setView('explore'); game.launch(); updateHUD(); });
     $('return-hangar').addEventListener('click', () => { closeModal(); setView('hangar'); });
+    $('return-station').addEventListener('click', () => { closeModal(); setView('station'); });
   });
 }
 
 game.onEvent = event => {
+  if (event.type === 'reset') shift.ensureState();
   if (event.type === 'zone') {
     $('zone-announcement').querySelector('strong').textContent = event.zone.name;
     $('zone-announcement').querySelector('p').textContent = event.message;
@@ -128,14 +148,14 @@ game.onEvent = event => {
     clearTimeout(announcementTimer); announcementTimer = setTimeout(() => $('zone-announcement').classList.remove('show'), 3800);
   } else if (event.type === 'return') { showReturn(event.expedition); }
   else if (event.type !== 'sonar') toast(event.title, event.message, event.type);
-  const soundTypes = { capture: 'capture', discovery: 'discovery', sonar: 'sonar', upgrade: 'upgrade', research: 'upgrade', craft: 'upgrade', level: 'level', warning: 'warning', wonder: 'discovery', collection: 'level', mission: 'level', return: 'return', launch: 'launch', vehicle: 'click' };
+  const soundTypes = { capture: 'capture', discovery: 'discovery', sonar: 'sonar', upgrade: 'upgrade', research: 'upgrade', craft: 'upgrade', level: 'level', warning: 'warning', wonder: 'discovery', collection: 'level', mission: 'level', return: 'return', launch: 'launch', vehicle: 'click', ability: 'sonar', paint: 'upgrade', cave: 'discovery' };
   if (soundTypes[event.type]) audio.play(soundTypes[event.type]);
   if (event.x != null) renderer.fx?.(event.type, event.x, event.y);
   if (event.type === 'wonder') {
     $('discovery-teaser-text').textContent = event.title.replace('奇观发现 · ', '已发现 · ');
     if (event.wonderId === 'last_light') queueMicrotask(() => openModal(`<p class="modal-eyebrow">THE END OF THE OCEAN / A NEW BEGINNING</p><h2 class="modal-title">你抵达了海洋的尽头。</h2><p class="modal-description">一万米之下，地裂里的蓝色微光照亮了你的潜艇。从第一只玻璃鳍鱼，到世界尽头的光——这片海洋，现在记得你。</p><div class="summary-grid"><div><strong>${number(game.maxDepth)}</strong><span>最深足迹 / 米</span></div><div><strong>${game.discoveries.length}/${SPECIES.length}</strong><span>已识生物</span></div><div><strong>${game.wonders.filter(w => w.discovered).length}/${WONDERS.length}</strong><span>发现的奇观</span></div></div><div class="help-note">主线探索已完成。仍有未知生物、未完成的基因和图鉴奖励等待收集。你可以继续自由航行。</div><div class="modal-footer"><span>保持好奇。下一次奇遇，仍在深处。</span><button class="primary-button" id="ending-continue">继续探索 ✧</button></div>`, () => $('ending-continue').addEventListener('click', closeModal)));
   }
-  if (['capture','discovery','research','upgrade','craft','vehicle','mission','collection','reset','return'].includes(event.type)) {
+  if (['capture','discovery','research','upgrade','craft','vehicle','mission','collection','reset','return','paint','cosmetic'].includes(event.type)) {
     if (view !== 'explore') queueMicrotask(renderView);
   }
   // Events may fire in the middle of an engine transaction; update after it finishes.
@@ -149,8 +169,10 @@ function updateHUD() {
   const battery = game.batteryPercent;
   $('credits').textContent = number(game.resources.credits);
   $('research-points').textContent = number(game.resources.research);
+  if (audio.enabled && $('music-label')) $('music-label').textContent = audio.sceneName;
   $('level-button').textContent = pad(game.level);
   $('codex-count').textContent = game.discoveries.length;
+  $('sample-count').textContent = shift.availableSamples;
   $('dive-number').textContent = String(game.totalDives + (game.docked ? 0 : 1)).padStart(3, '0');
   $('zone-index').textContent = pad(zoneIndex + 1);
   $('zone-name').textContent = game.zone.name;
@@ -184,7 +206,18 @@ function updateHUD() {
   const target = game.nearestTarget;
   const ready = Boolean(target && !game.docked && !game.paused);
   $('target-prompt').classList.toggle('ready', ready);
-  $('target-prompt').querySelector('span').textContent = ready ? `${target.type === 'mineral' ? '采集' : '捕获'} ${target.speciesId ? game.getSpecies(target.speciesId).name : '深海合金'}` : '靠近生物，即可捕获';
+  $('target-prompt').querySelector('span').textContent = ready ? `${target.type === 'mineral' ? '开采' : '捕获'} ${target.speciesId ? game.getSpecies(target.speciesId).name : '岩壁矿脉'}` : game.player.y >= 1000 ? 'Q 探测信号，再靠近目标' : '靠近生物或岩壁矿脉';
+  const visibility = game.visibility;
+  $('visibility-hint').textContent = game.sonar.remaining > 0 ? `声呐回声 · ${Math.ceil(game.sonar.remaining)} 秒` : game.player.y >= 1000 ? `深海无光 · 近距照明 ${number(visibility.ambientRadius)} m` : game.player.y >= 200 ? '日光渐弱 · 声呐寻找生态热点' : '日光充足 · 留意岩壁与洞穴';
+  const contacts = [...game.contacts].sort((a, b) => Math.hypot(a.x - game.player.x, a.y - game.player.y) - Math.hypot(b.x - game.player.x, b.y - game.player.y));
+  const contact = contacts[0];
+  $('contact-hint').textContent = contact ? `${contact.y > game.player.y + 30 ? '↓' : contact.y < game.player.y - 30 ? '↑' : '↔'} ${contact.name} · ${number(Math.hypot(contact.x - game.player.x, contact.y - game.player.y))} m` : 'Q 寻找生态热点 · 深水生命集中于栖息地';
+  $('carrier-hint').hidden = !game.carrier;
+  if (game.carrier) $('carrier-hint').textContent = `母舰 ${number(Math.hypot(game.carrier.x - game.player.x, game.carrier.y - game.player.y))} / 500 m · 靠近后 F 接驳`;
+  const ability = game.activeAbility;
+  $('ability-label').textContent = ability.cooldown > 0 ? `${ability.name} ${Math.ceil(ability.cooldown)}s` : ability.name;
+  $('ability-button').disabled = !ability.ready || game.docked;
+  $('ability-button').title = ability.description;
   if (ready !== lastReady) { $('capture-button').classList.toggle('ready', ready); lastReady = ready; }
   $('sonar-label').textContent = game.sonar.cooldown > 0 ? `充能 ${Math.ceil(game.sonar.cooldown)}s` : '声呐探测';
   $('sonar-button').disabled = game.sonar.cooldown > 0 || game.docked;
@@ -201,7 +234,8 @@ function updateHUD() {
   $('record-depth').innerHTML = `${number(game.maxDepth)}<small>m</small>`;
   $('species-count').innerHTML = `${pad(game.discoveries.length)}<small>/ ${SPECIES.length}</small>`;
   $('pause-button').innerHTML = svg(manuallyPaused ? 'play' : 'pause');
-  $('pause-button').setAttribute('aria-label', manuallyPaused ? '继续航行' : '暂停航行');
+  $('pause-button').setAttribute('aria-label', manuallyPaused ? '继续游戏' : '暂停游戏');
+  $('pause-button').disabled = view === 'station' ? !shift.active : view !== 'explore' || game.docked;
   $('screen-state').hidden = !game.docked && !manuallyPaused;
   if (game.docked || manuallyPaused) {
     $('state-eyebrow').textContent = game.docked ? 'WELCOME HOME' : 'TAKE A BREATH';
@@ -209,6 +243,7 @@ function updateHUD() {
     $('state-description').textContent = game.docked ? '补满电量，准备下一次奇遇。' : '航行已暂停。慢慢来，奇遇不会错过。';
     $('state-action').innerHTML = game.docked ? '再次下潜 <span>↓</span>' : '继续探索 <span>→</span>';
     $('state-secondary').hidden = !game.docked;
+    $('state-secondary').textContent = `基地科研值班 · ${shift.availableSamples} 份待处理样本 ↗`;
   }
 }
 
@@ -221,20 +256,29 @@ $('capture-button').addEventListener('click', () => game.capture());
 $('sonar-button').addEventListener('click', () => game.scan());
 $('return-button').addEventListener('click', () => game.returnToBase());
 $('deploy-button').addEventListener('click', () => game.deploySub());
+$('ability-button').addEventListener('click', () => game.useAbility());
 $('sound-button').addEventListener('click', () => {
   const enabled = audio.toggle();
-  $('sound-button').innerHTML = svg(enabled ? 'sound' : 'mute');
+  $('sound-button').innerHTML = `${svg(enabled ? 'sound' : 'mute')}<span id="music-label">${enabled ? audio.sceneName : '开启音乐'}</span>`;
   $('sound-button').classList.toggle('enabled', enabled);
-  $('sound-button').title = enabled ? '关闭声音' : '开启声音';
-  $('sound-button').setAttribute('aria-label', enabled ? '关闭声音' : '开启声音');
+  $('sound-button').title = enabled ? '关闭音乐与声音' : '开启音乐与声音';
+  $('sound-button').setAttribute('aria-label', enabled ? '关闭音乐与声音' : '开启音乐与声音');
+  $('music-volume').hidden = !enabled;
   if (enabled) audio.play('sonar');
 });
-function togglePause() { if (view !== 'explore' || modal.open || game.docked) return; manuallyPaused = !manuallyPaused; keys.clear(); touch.clear(); syncPause(); updateHUD(); }
+$('music-volume').addEventListener('input', event => { audio.setVolume(Number(event.target.value) / 100); try { localStorage.setItem('dive-into-wonder-volume', event.target.value); } catch {} });
+try { const volume = Number(localStorage.getItem('dive-into-wonder-volume') ?? 70); if (Number.isFinite(volume)) { $('music-volume').value = String(Math.max(0, Math.min(100, volume))); audio.setVolume(Number($('music-volume').value) / 100); } } catch {}
+function togglePause() {
+  if (modal.open || (view === 'station' ? !shift.active : view !== 'explore' || game.docked)) return;
+  manuallyPaused = !manuallyPaused;
+  keys.clear(); touch.clear(); syncPause(); updateHUD();
+}
 $('pause-button').addEventListener('click', togglePause);
 $('state-action').addEventListener('click', () => { manuallyPaused = false; if (game.docked) game.launch(); syncPause(); updateHUD(); });
-$('state-secondary').addEventListener('click', () => setView('hangar'));
+$('state-secondary').addEventListener('click', () => setView('station'));
 
 function renderView() {
+  if (view === 'station') stationUI.render();
   if (view === 'hangar') renderHangar();
   if (view === 'research') renderResearch();
   if (view === 'codex') renderCodex();
@@ -249,7 +293,10 @@ function renderHangar() {
     const level = game.upgrades[upgrade.id]; const cost = game.getUpgradeCost(upgrade.id); const maxed = level >= upgrade.maxLevel;
     return `<article class="upgrade-card"><div class="upgrade-top"><span class="upgrade-icon">${svg({ hull: 'shield', battery: 'battery', cargo: 'box', thruster: 'speed' }[upgrade.id])}</span><div><h3>${upgrade.name}</h3><div class="upgrade-levels">${'▰'.repeat(level)}${'▱'.repeat(upgrade.maxLevel - level)} <span>MK.${level}</span></div></div></div><p>${upgrade.description}</p><button class="card-button" data-upgrade="${upgrade.id}" ${maxed || !game.docked || !game.canAfford(cost) ? 'disabled' : ''}><span>${maxed ? '改装已满级' : '升级'}</span><span>${maxed ? 'MAX' : `${cost.credits} 信用 · ${cost.alloy} 合金`}</span></button></article>`;
   }).join('')}</div>${game.docked ? '<div class="section-heading upgrades-heading"><p>一切就绪。新的海域正等着你。</p><button class="primary-button" id="hangar-launch">出发，继续下潜 ↓</button></div>' : ''}`;
-  root.querySelectorAll('[data-vehicle]').forEach(canvas => drawVehicle(canvas, canvas.dataset.vehicle));
+  root.insertAdjacentHTML('beforeend', `<div class="section-heading upgrades-heading"><div><h2>把你的航程，涂在艇身上。</h2><p>洞穴探险、科研值班和深度委托奖励涂装。纯外观，不占改装槽。</p></div><span>PERSONAL LIVERY</span></div><div class="paint-grid">${Object.values(VEHICLES).map(vehicle => `<article class="paint-card"><div class="paint-preview"><canvas width="180" height="90" data-paint-vehicle="${vehicle.id}"></canvas><div><h3>${vehicle.name}</h3><p>${PAINTS.find(paint => paint.id === game.paintByVehicle[vehicle.id])?.name || '原厂涂装'}</p></div></div><div class="paint-options">${PAINTS.map(paint => `<button data-equip-paint="${paint.id}" data-paint-for="${vehicle.id}" class="paint-option ${game.paintByVehicle[vehicle.id] === paint.id ? 'selected' : ''}" style="--paint-color:${paint.body}" title="${game.unlockedPaints.includes(paint.id) ? paint.name : paint.unlockText}" ${!game.docked || !game.ownedVehicles.includes(vehicle.id) || !game.unlockedPaints.includes(paint.id) ? 'disabled' : ''}><i></i><span>${paint.name}</span>${game.unlockedPaints.includes(paint.id) ? '' : '<small>未解锁</small>'}</button>`).join('')}</div></article>`).join('')}</div><div class="paint-unlocks">${PAINTS.filter(paint => paint.id !== 'classic').map(paint => `<span>${game.unlockedPaints.includes(paint.id) ? '✓' : '◇'} ${paint.name} · ${paint.unlockText}</span>`).join('')}</div>`);
+  root.querySelectorAll('[data-vehicle]').forEach(canvas => drawVehicle(canvas, canvas.dataset.vehicle, game.paintByVehicle[canvas.dataset.vehicle]));
+  root.querySelectorAll('[data-paint-vehicle]').forEach(canvas => drawVehicle(canvas, canvas.dataset.paintVehicle, game.paintByVehicle[canvas.dataset.paintVehicle]));
+  root.querySelectorAll('[data-equip-paint]').forEach(button => button.addEventListener('click', () => { game.equipPaint(button.dataset.paintFor, button.dataset.equipPaint); renderHangar(); }));
   root.querySelectorAll('[data-fleet]').forEach(button => button.addEventListener('click', () => { const id = button.dataset.fleet; if (game.ownedVehicles.includes(id)) game.selectVehicle(id); else game.craftVehicle(id); renderHangar(); updateHUD(); }));
   root.querySelectorAll('[data-upgrade]').forEach(button => button.addEventListener('click', () => { game.upgrade(button.dataset.upgrade); renderHangar(); updateHUD(); }));
   root.querySelector('[data-port]')?.addEventListener('click', () => game.returnToBase());
@@ -258,12 +305,13 @@ function renderHangar() {
 
 function renderResearch() {
   const root = $('research-view');
-  root.innerHTML = `<div class="lab-banner"><span>${svg('dna')}</span><div><h3>亿万年的进化，现在为你所用。</h3><p>捕获对应生物，即可使用科研点解锁永久能力。基因适应会应用于全部载具。</p></div><div class="lab-count">${game.researched.length}<small>/ ${GENES.length} 已融合</small></div></div><div class="section-heading"><div><h2>基因适应计划</h2><p>样本提供灵感，科研带来改变。返航后获得本次采集的科研点。</p></div><span>◈ ${number(game.resources.research)} 科研点</span></div><div class="genes-grid">${GENES.map(gene => {
+  root.innerHTML = `<div class="lab-banner"><span>${svg('dna')}</span><div><h3>亿万年的进化，现在为你所用。</h3><p>下潜取得样本 → 基地科研值班 → 融合基因。适应能力永久应用于全部载具。</p></div><div class="lab-count">${game.researched.length}<small>/ ${GENES.length} 已融合</small></div></div><div class="section-heading"><div><h2>基因适应计划</h2><p>值班中的校准质量、连击和专项委托会提高科研收入。</p></div><button class="filter-chip" id="genes-to-station">◈ ${number(game.resources.research)} 科研点 · 去值班 ↗</button></div><div class="genes-grid">${GENES.map(gene => {
     const species = game.getSpecies(gene.speciesId); const discovered = game.discoveries.includes(gene.speciesId); const done = game.researched.includes(gene.id);
     return `<article class="gene-card ${done ? 'done' : ''} ${!discovered ? 'locked' : ''}"><div class="gene-top"><canvas width="120" height="90" data-specimen="${gene.speciesId}"></canvas><div><h3>${gene.name}</h3><p>源自 · ${species.name}</p></div></div><p class="gene-description">${gene.description}</p><div class="gene-unlock">${done ? '✓ 已永久融合至全部载具' : discovered ? `✓ ${species.name}样本已取得` : `○ 前往${ZONES.find(zone => zone.id === species.zone).name}捕获${species.name}`}</div><button class="card-button ${done ? 'purchased' : ''}" data-gene="${gene.id}" ${done || !discovered || game.resources.research < gene.cost ? 'disabled' : ''}><span>${done ? '基因适应已激活' : !discovered ? '等待生物样本' : game.resources.research < gene.cost ? '科研点不足' : '开始基因研究'}</span><span>${done ? 'ACTIVE' : `${gene.cost} 科研点`}</span></button></article>`;
   }).join('')}</div>`;
   root.querySelectorAll('[data-specimen]').forEach(canvas => drawSpecimen(canvas, canvas.dataset.specimen));
   root.querySelectorAll('[data-gene]').forEach(button => button.addEventListener('click', () => { game.research(button.dataset.gene); renderResearch(); updateHUD(); }));
+  $('genes-to-station').addEventListener('click', () => setView('station'));
 }
 
 function renderCodex() {
@@ -282,15 +330,17 @@ function renderCodex() {
 
 function showSpecimen(id) {
   const species = game.getSpecies(id); const found = game.discoveries.includes(id); const zone = ZONES.find(item => item.id === species.zone);
-  openModal(`<p class="modal-eyebrow">OCEAN ARCHIVE / ${pad(SPECIES.indexOf(species) + 1)}</p><h2 class="modal-title">${found ? species.name : '还未相识的生命'}</h2><div class="specimen-modal-art"><canvas width="230" height="150" id="modal-specimen" ${found ? '' : 'style="filter:brightness(.25)"'}></canvas></div><p class="modal-description">${found ? species.description : `在${zone.name}，有一个小小的秘密正等着你。将潜艇开近它，按 E 带回第一份样本。`}</p><div class="specimen-facts"><span>栖息海域<b>${zone.name}</b></span><span>采集负载<b>${found ? species.weight : '?'} kg</b></span><span>稀有程度<b>${found ? species.rarity : '未知'}</b></span></div>${found ? `<div class="help-note">${species.ability}<br>已采集 ${game.captureCounts[id] || 0} 份 · 每份 ${species.value} 信用点 / ${species.research} 科研点</div>` : `<div class="help-note">栖息深度 ${number(zone.min)} – ${number(zone.max)} 米。升级耐压艇壳，可以让探索更安全。</div>`}`, () => drawSpecimen($('modal-specimen'), id));
+  openModal(`<p class="modal-eyebrow">OCEAN ARCHIVE / ${pad(SPECIES.indexOf(species) + 1)}</p><h2 class="modal-title">${found ? species.name : '还未相识的生命'}</h2><div class="specimen-modal-art"><canvas width="230" height="150" id="modal-specimen" ${found ? '' : 'style="filter:brightness(.25)"'}></canvas></div><p class="modal-description">${found ? species.description : `在${zone.name}，有一个小小的秘密正等着你。将潜艇开近它，按 E 带回第一份样本。`}</p><div class="specimen-facts"><span>栖息海域<b>${zone.name}</b></span><span>采集负载<b>${found ? species.weight : '?'} kg</b></span><span>稀有程度<b>${found ? species.rarity : '未知'}</b></span></div>${found ? `<div class="help-note">${species.ability}<br>已采集 ${game.captureCounts[id] || 0} 份 · 航行价值 ${species.value} 信用点<br>基准科研 ${species.research}，科研值班按质量与连击结算</div>` : `<div class="help-note">栖息深度 ${number(zone.min)} – ${number(zone.max)} 米。升级耐压艇壳，可以让探索更安全。</div>`}`, () => drawSpecimen($('modal-specimen'), id));
 }
 
-const controlKeys = new Set(['w','a','s','d','arrowup','arrowleft','arrowdown','arrowright','shift','e','q','r','f',' ','escape']);
+const controlKeys = new Set(['w','a','s','d','arrowup','arrowleft','arrowdown','arrowright','shift','e','q','r','f','v','1','2','3',' ','escape']);
 window.addEventListener('keydown', event => {
   if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement) return;
   const key = event.key.toLowerCase();
   if (!controlKeys.has(key)) return;
   if (modal.open) return;
+  if (view === 'station' && key === ' ') { event.preventDefault(); if (!event.repeat) togglePause(); return; }
+  if (view === 'station' && ['1','2','3'].includes(key)) { event.preventDefault(); if (!event.repeat) stationUI.shortcut(key); return; }
   if (view !== 'explore') { if (key === 'escape') { event.preventDefault(); setView('explore'); } return; }
   event.preventDefault();
   keys.add(key); audio.resume();
@@ -301,9 +351,10 @@ window.addEventListener('keydown', event => {
   if (key === 'q') game.scan();
   if (key === 'r') game.returnToBase();
   if (key === 'f') game.deploySub();
+  if (key === 'v') game.useAbility();
 });
 window.addEventListener('keyup', event => keys.delete(event.key.toLowerCase()));
-window.addEventListener('blur', () => { keys.clear(); touch.clear(); if (view === 'explore' && !game.docked && !modal.open) manuallyPaused = true; syncPause(); updateHUD(); });
+window.addEventListener('blur', () => { keys.clear(); touch.clear(); if (!modal.open && ((view === 'explore' && !game.docked) || (view === 'station' && shift.active))) manuallyPaused = true; syncPause(); updateHUD(); });
 document.addEventListener('visibilitychange', () => { keys.clear(); touch.clear(); syncPause(); if (document.hidden) game.save(); });
 window.addEventListener('pagehide', () => game.save());
 document.querySelectorAll('[data-direction]').forEach(button => {
@@ -316,9 +367,10 @@ function frame(now) {
   const dt = Math.min((now - lastFrame) / 1000, .1); lastFrame = now;
   const input = { x: Number(keys.has('d') || keys.has('arrowright') || touch.has('right')) - Number(keys.has('a') || keys.has('arrowleft') || touch.has('left')), y: Number(keys.has('s') || keys.has('arrowdown') || touch.has('down')) - Number(keys.has('w') || keys.has('arrowup') || touch.has('up')), boost: keys.has('shift') };
   game.update(dt, input);
+  if (view === 'station' && !modal.open && !document.hidden) shift.update(dt);
   if (view === 'explore') renderer.render(game, now / 1000);
   hudElapsed += dt;
-  if (hudElapsed >= .1) { hudElapsed = 0; updateHUD(); audio.setDepth(game.player.y); }
+  if (hudElapsed >= .1) { hudElapsed = 0; updateHUD(); audio.setDepth(game.player.y); if (view === 'station') stationUI.tick(); }
   requestAnimationFrame(frame);
 }
 updateHUD(); syncPause(); requestAnimationFrame(frame);

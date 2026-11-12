@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { Game } from '../engine.js';
 import { GENES, SPECIES, UPGRADES, VEHICLES, ZONES } from '../data.js';
 import { Soundscape } from '../audio.js';
+import { CAVES, isWater } from '../world.js';
 
 function memoryStorage() {
   const values = new Map();
@@ -46,7 +47,8 @@ test('capturing awards discoveries immediately but settles sample resources only
 
   assert.equal(game.returnToBase(), true);
   assert.equal(game.resources.credits, initialCredits + species.value);
-  assert.equal(game.resources.research, initialResearch + species.research);
+  assert.equal(game.resources.research, initialResearch + Math.floor(species.research * 0.2));
+  assert.equal(game.sampleStock.glassfish, 1);
   assert.equal(game.cargoWeight, 0);
   assert.equal(game.battery, game.stats.battery);
   assert.equal(game.hull, 100);
@@ -55,6 +57,7 @@ test('capturing awards discoveries immediately but settles sample resources only
   const settled = { ...game.resources };
   assert.equal(game.returnToBase(), false);
   assert.deepEqual(game.resources, settled);
+  assert.equal(game.sampleStock.glassfish, 1);
   assert.equal(game.launch(), true);
   assert.equal(game.expedition.captures, 0);
   assert.equal(game.expedition.credits, 0);
@@ -89,6 +92,7 @@ test('reloading an active expedition safely settles it exactly once', () => {
   assert.equal(resumed.cargoWeight, 0);
   assert.equal(resumed.lastExpedition.resumed, true);
   assert.deepEqual(resumed.discoveries, ['glassfish']);
+  assert.equal(resumed.sampleStock.glassfish, 1);
   for (const key of ['credits', 'research', 'alloy']) {
     assert.equal(resumed.resources[key], before[key] + earnings[key]);
   }
@@ -97,6 +101,7 @@ test('reloading an active expedition safely settles it exactly once', () => {
   assert.deepEqual(reopened.resources, resumed.resources);
   assert.equal(reopened.totalDives, resumed.totalDives);
   assert.equal(reopened.lastExpedition.captures, 1);
+  assert.deepEqual(reopened.sampleStock, resumed.sampleStock);
 });
 
 test('broken or unavailable storage does not prevent gameplay', () => {
@@ -159,7 +164,7 @@ test('gene research requires its specimen and points, and cannot charge twice', 
   assert.deepEqual(game.researched, ['lumen']);
 });
 
-test('carrier deployment shares pressure protection and cargo, and requires proximity to dock', () => {
+test('carrier deployment transfers finite energy, uses separate cargo, and only protects within tether range', () => {
   const game = fresh();
   game.resources = { credits: 10000, research: 1000, alloy: 1000 };
   game.returnToBase();
@@ -172,17 +177,25 @@ test('carrier deployment shares pressure protection and cargo, and requires prox
   assert.equal(game.deploySub(), true);
   assert.equal(game.vehicle, 'moth');
   assert.equal(game.deployed, true);
-  assert.equal(game.stats.cargo, capacity);
+  assert.ok(game.stats.cargo < capacity);
+  assert.deepEqual(game.carrier.cargo, []);
   assert.equal(game.stats.maxDepth, maxDepth);
+  assert.equal(game.battery + game.carrier.battery, carrierBattery - 8);
 
-  game.player.y += 500;
+  game.player.y += 600;
+  assert.equal(game.tetherConnected, false);
+  assert.equal(game.stats.maxDepth, VEHICLES.moth.maxDepth);
   assert.equal(game.deploySub(), false);
   assert.equal(game.deployed, true);
   game.player.y = game.carrier.y;
   assert.equal(game.deploySub(), true);
   assert.equal(game.vehicle, 'whale');
   assert.equal(game.deployed, false);
-  assert.equal(game.battery, carrierBattery - 18);
+  assert.equal(game.battery, carrierBattery - 12);
+  const afterFirstCycle = game.battery;
+  assert.equal(game.deploySub(), true);
+  assert.equal(game.deploySub(), true);
+  assert.equal(game.battery, afterFirstCycle - 12);
 });
 
 test('mission and collection claims advance their thresholds without repeat payouts', () => {
@@ -233,6 +246,7 @@ test('movement normalizes diagonals, boosting costs more, and pause freezes acti
 
 test('pressure damages the hull and exhausted power rescues all collected samples', () => {
   const game = fresh();
+  game.wonders = [];
   game.player.y = game.stats.maxDepth + 700;
   game.update(0.1);
   assert.ok(game.hull < 100);
@@ -254,9 +268,173 @@ test('every collectible species has reachable world spawns', () => {
   const spawned = new Set(game.entities.filter(entity => entity.type === 'creature').map(entity => entity.speciesId));
   assert.deepEqual(spawned, new Set(SPECIES.map(species => species.id)));
   for (const entity of game.entities) {
-    assert.ok(entity.x >= 85 && entity.x <= 915);
+    assert.ok(isWater(entity.x, entity.y));
     assert.ok(entity.y > 0 && entity.y < 11000);
   }
+});
+
+test('deep targets require the lamp or a live sonar detection before capture', () => {
+  const game = fresh();
+  game.player = { x: 490, y: 2000, facing: 1, heading: { x: 1, y: 0 } };
+  const entity = putSampleWithinReach(game, 'ghost_shrimp');
+  entity.x = game.player.x - 85;
+  entity.originX = entity.x;
+  assert.equal(game.isEntityVisible(entity), false);
+  assert.equal(game.nearestTarget, null);
+  assert.equal(game.capture(), false);
+  assert.equal(game.scan(), true);
+  assert.equal(game.isEntityVisible(entity), true);
+  assert.equal(game.nearestTarget, entity);
+  game.elapsed += game.sonar.duration + 0.1;
+  assert.equal(game.isEntityVisible(entity), false);
+  game.player.heading = { x: -1, y: 0 };
+  assert.equal(game.isEntityVisible(entity), true);
+  assert.equal(game.capture(), true);
+});
+
+test('sonar contacts reveal ecological destinations and expire instead of exposing the whole map', () => {
+  const game = fresh();
+  game.player.y = 8800;
+  assert.deepEqual(game.contacts, []);
+  game.scan();
+  assert.ok(game.contacts.some(contact => contact.id === 'last_light'));
+  assert.ok(!game.contacts.some(contact => contact.id === 'moon_garden'));
+  game.elapsed += 40;
+  assert.deepEqual(game.contacts, []);
+});
+
+test('the scientific vessel produces better samples and has uniquely long sonar', () => {
+  const game = fresh();
+  game.vehicle = 'ray';
+  game.ownedVehicles.push('ray');
+  const entity = putSampleWithinReach(game, 'lanternfish');
+  assert.equal(game.useAbility(), true);
+  assert.equal(entity.biologicalScan, true);
+  assert.equal(entity.sampleCondition, 'scanned');
+  assert.equal(game.useAbility(), false);
+  assert.equal(game.capture(), true);
+  assert.ok(game.expedition.research > Math.floor(game.getSpecies('lanternfish').research * 0.2));
+  assert.equal(game.cargo[0].sampleCondition, 'scanned');
+  game.scan();
+  assert.equal(game.sonar.duration, 8);
+  assert.equal(game.sonar.radius, 1150);
+});
+
+test('whale drilling extracts more rock and cannot vacuum cave ore through the wall', () => {
+  const game = fresh();
+  game.vehicle = 'whale';
+  game.player = { x: 160, y: 1500, facing: -1, heading: { x: -1, y: 0 } };
+  const mineral = { id: 'ore', type: 'mineral', alive: true, x: 102, y: 1500, amount: 4, attachment: { side: 'left', anchorX: 90, anchorY: 1500 } };
+  game.entities = [mineral];
+  assert.equal(game.useAbility(), true);
+  assert.equal(game.expedition.alloy, 10);
+  assert.equal(mineral.alive, false);
+  const cave = CAVES[0];
+  game.player.x = 134;
+  game.player.y = cave.y;
+  const caveOre = { ...mineral, id: 'cave-ore', alive: true, x: 42, y: cave.y, caveId: cave.id };
+  game.entities = [caveOre];
+  game.abilityCooldowns.whale = 0;
+  assert.equal(game.nearestTarget, null);
+  assert.equal(game.useAbility(), false);
+  assert.equal(caveOre.alive, true);
+});
+
+test('all minerals are anchored to real walls or cave floors and deep ecosystems are sparse', () => {
+  const game = fresh();
+  for (const entity of game.entities.filter(item => item.type === 'mineral')) {
+    assert.ok(entity.attachment);
+    const { side, anchorX, anchorY } = entity.attachment;
+    if (side === 'floor') {
+      const cave = CAVES.find(item => item.id === entity.caveId);
+      assert.equal(anchorY, cave.bounds.bottom);
+      assert.equal(entity.y, anchorY - 12);
+    } else {
+      assert.equal(anchorX, side === 'left' ? 90 : 910);
+      assert.equal(Math.abs(entity.x - anchorX), 12);
+    }
+  }
+  const deep = game.entities.filter(entity => entity.type === 'creature' && entity.y >= 4000);
+  assert.ok(deep.length >= 25 && deep.length <= 45);
+  assert.ok(!deep.some(entity => entity.y > 8000 && entity.y < 10000));
+  assert.ok(VEHICLES.moth.speed > VEHICLES.ray.speed && VEHICLES.ray.speed > VEHICLES.whale.speed);
+});
+
+test('entering the first cave unlocks a permanent usable paint without double rewards', () => {
+  const game = fresh();
+  const cave = CAVES[0];
+  game.player.x = 42;
+  game.player.y = cave.y;
+  game.update(0.1);
+  assert.equal(game.currentCave.id, cave.id);
+  assert.ok(game.unlockedPaints.includes('coral'));
+  const credits = game.resources.credits;
+  game.update(0.1);
+  assert.equal(game.resources.credits, credits);
+  assert.equal(game.equipPaint('moth', 'coral'), false);
+  game.returnToBase();
+  assert.equal(game.equipPaint('moth', 'coral'), true);
+  assert.equal(game.paintId, 'coral');
+});
+
+test('lab state, admitted stock and cosmetic choices survive a save without duplicating inventory', () => {
+  const storage = memoryStorage();
+  const game = new Game({ storage, load: false });
+  game.returnToBase();
+  game.sampleStock = { glassfish: 4 };
+  game.labState = { running: true, queue: [{ speciesId: 'glassfish' }], score: 5 };
+  game.labProcessed = 10;
+  game.labRuns = 2;
+  game.labBestCombo = 4;
+  game.unlockPaint('aurora');
+  game.equipPaint('moth', 'aurora');
+  game.save();
+  const loaded = new Game({ storage });
+  assert.deepEqual(loaded.sampleStock, { glassfish: 4 });
+  assert.deepEqual(loaded.labState, game.labState);
+  assert.equal(loaded.labProcessed, 10);
+  assert.equal(loaded.labRuns, 2);
+  assert.equal(loaded.labBestCombo, 4);
+  assert.equal(loaded.paintId, 'aurora');
+});
+
+test('a saved carrier expedition recovers mother and scout samples exactly once', () => {
+  const storage = memoryStorage();
+  const game = new Game({ storage, load: false });
+  game.vehicle = 'whale';
+  game.ownedVehicles.push('whale');
+  game.battery = game.stats.battery;
+  putSampleWithinReach(game, 'glassfish');
+  game.capture();
+  game.deploySub();
+  assert.equal(game.carrier.cargo[0].speciesId, 'glassfish');
+  assert.equal(game.cargoWeight, 0);
+  putSampleWithinReach(game, 'emberfin');
+  game.capture();
+  game.save();
+  const loaded = new Game({ storage });
+  assert.equal(loaded.vehicle, 'whale');
+  assert.deepEqual(loaded.sampleStock, { glassfish: 1, emberfin: 1 });
+  assert.equal(loaded.lastExpedition.captures, 2);
+  const again = new Game({ storage });
+  assert.deepEqual(again.sampleStock, loaded.sampleStock);
+  assert.deepEqual(again.resources, loaded.resources);
+});
+
+test('version one migration preserves upgrades and resources and recovers outstanding samples exactly once', () => {
+  const storage = memoryStorage();
+  storage.setItem('dive-into-wonder-v1', JSON.stringify({ version: 1, vehicle: 'ray', ownedVehicles: ['moth', 'ray'], resources: { credits: 1234, research: 321, alloy: 20 }, upgrades: { hull: 3, cargo: 2 }, discoveries: ['glassfish'], docked: false, expedition: { credits: 32, research: 8, alloy: 0, captures: 1 }, cargo: [{ speciesId: 'glassfish', count: 1, weight: 1 }], missionTiers: { depth: 2 } }));
+  const game = new Game({ storage });
+  assert.equal(game.resources.credits, 1266);
+  assert.equal(game.resources.research, 329);
+  assert.equal(game.upgrades.hull, 3);
+  assert.equal(game.upgrades.cargo, 2);
+  assert.equal(game.vehicle, 'ray');
+  assert.equal(game.sampleStock.glassfish, 1);
+  assert.equal(JSON.parse(storage.getItem('dive-into-wonder-v1')).version, 2);
+  const reloaded = new Game({ storage });
+  assert.deepEqual(reloaded.resources, game.resources);
+  assert.deepEqual(reloaded.sampleStock, game.sampleStock);
 });
 
 test('audio starts muted and safely tolerates platforms without Web Audio', () => {

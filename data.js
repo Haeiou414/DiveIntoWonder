@@ -28,10 +28,17 @@ export const SPECIES = [
 ];
 
 export const VEHICLES = {
-  moth: { id: 'moth', name: '萤蛾号', tag: '轻型探索艇', description: '小巧灵活的第一位伙伴。轻快推进，适合精细采集；可搭载于鲸落号。', cost: { credits: 0, alloy: 0 }, maxDepth: 650, battery: 210, cargo: 16, speed: 125, vision: 235, captureRange: 120, color: '#eccb8a' },
-  ray: { id: 'ray', name: '蝠鲼号', tag: '科研巡航艇', description: '更宽的声呐视野、更大的样本舱。捕捉范围增加，声呐耗电减半。', cost: { credits: 650, alloy: 10 }, maxDepth: 2600, battery: 300, cargo: 28, speed: 155, vision: 285, captureRange: 155, color: '#9acfd2' },
-  whale: { id: 'whale', name: '鲸落号', tag: '深海母舰', description: '厚重而可靠的移动基地。可释放萤蛾号，母舰提供耐压保护与共享样本舱。', cost: { credits: 2200, alloy: 32 }, maxDepth: 6500, battery: 440, cargo: 54, speed: 100, vision: 260, captureRange: 145, color: '#a7accd' },
+  moth: { id: 'moth', name: '萤蛾号', tag: '洞穴侦察艇', description: '唯一能通过狭窄洞喉的艇型，速度最快、转向灵巧。V 短距冲刺；样本舱较小。', cost: { credits: 0, alloy: 0 }, maxDepth: 650, battery: 210, cargo: 14, speed: 155, vision: 220, captureRange: 100, color: '#eccb8a' },
+  ray: { id: 'ray', name: '蝠鲼号', tag: '生物科研艇', description: '远距声呐持续 8 秒。V 生物断层扫描提升样本科研价值；无法进入洞穴。', cost: { credits: 650, alloy: 10 }, maxDepth: 2600, battery: 300, cargo: 24, speed: 115, vision: 245, captureRange: 130, color: '#9acfd2' },
+  whale: { id: 'whale', name: '鲸落号', tag: '采矿支援母舰', description: '重型钻机提高矿物产出，V 连锁破岩。可停泊并释放萤蛾号；500 米脐带内提供耐压保护。', cost: { credits: 2200, alloy: 32 }, maxDepth: 6500, battery: 440, cargo: 54, speed: 76, vision: 210, captureRange: 135, color: '#a7accd' },
 };
+
+export const PAINTS = [
+  { id: 'classic', name: '远航原色', body: '#eccb8a', accent: '#73dfd0', unlockText: '初始解锁' },
+  { id: 'coral', name: '珊瑚余晖', body: '#ee958d', accent: '#ffe2a1', unlockText: '驾驶萤蛾号进入珊瑚密室' },
+  { id: 'aurora', name: '极光实验室', body: '#87d8c9', accent: '#b9a5ff', unlockText: '科研值班成功处理 10 份样本' },
+  { id: 'abyss', name: '深渊星轨', body: '#8c9de7', accent: '#e1c4ff', unlockText: '领取抵达 5,000 米的深潜委托奖励' },
+];
 
 export const GENES = [
   { id: 'lumen', name: '生物荧光', speciesId: 'moonjelly', description: '将月光水母的荧光蛋白融入探照系统。视野增加 30%。', cost: 30, effect: '+30% 探照视野' },
