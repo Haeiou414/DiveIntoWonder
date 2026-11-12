@@ -4,6 +4,7 @@ import { Game } from '../engine.js';
 import { GENES, SPECIES, UPGRADES, VEHICLES, ZONES } from '../data.js';
 import { Soundscape } from '../audio.js';
 import { CAVES, isWater } from '../world.js';
+import { BIO_MODULES } from '../bio-modules.js';
 
 function memoryStorage() {
   const values = new Map();
@@ -270,6 +271,29 @@ test('every collectible species has reachable world spawns', () => {
   for (const entity of game.entities) {
     assert.ok(isWater(entity.x, entity.y));
     assert.ok(entity.y > 0 && entity.y < 11000);
+    if (entity.type === 'creature') {
+      const species = game.getSpecies(entity.speciesId);
+      const range = game.speciesDepthRange(species);
+      assert.ok(entity.y >= range[0] && entity.y <= range[1], `${species.id} spawned outside its depth range`);
+    }
+  }
+});
+
+test('creature motion respects depth ranges and attached organisms never drift into open water', () => {
+  const game = fresh();
+  const attached = game.entities.filter(entity => entity.type === 'creature' && ['sessile', 'benthic'].includes(entity.behavior));
+  const initialPositions = new Map(attached.map(entity => [entity.id, { x: entity.x, y: entity.y }]));
+  for (const time of [0.2, 2, 7, 20, 60]) {
+    game.elapsed = time;
+    for (const entity of game.entities.filter(item => item.type === 'creature')) {
+      game.moveCreature(entity);
+      assert.ok(isWater(entity.x, entity.y));
+      const range = game.speciesDepthRange(game.getSpecies(entity.speciesId));
+      assert.ok(entity.y >= range[0] && entity.y <= range[1]);
+      if (entity.behavior === 'sessile') assert.deepEqual({ x: entity.x, y: entity.y }, initialPositions.get(entity.id));
+      if (entity.behavior === 'benthic' && !entity.caveId && entity.attachment?.side !== 'floor') assert.ok(entity.x < 125 || entity.x > 875);
+      if (entity.attachment?.side === 'floor' && !entity.caveId) assert.equal(entity.y, initialPositions.get(entity.id).y);
+    }
   }
 });
 
@@ -318,6 +342,177 @@ test('the scientific vessel produces better samples and has uniquely long sonar'
   game.scan();
   assert.equal(game.sonar.duration, 8);
   assert.equal(game.sonar.radius, 1150);
+});
+
+test('ray sonar and lineage survey produce remote non-invasive samples without repeat harvesting', () => {
+  const storage = memoryStorage();
+  const game = new Game({ storage, load: false });
+  game.vehicle = 'ray';
+  game.ownedVehicles.push('ray');
+  game.player = { x: 490, y: 2000, facing: 1, heading: { x: 1, y: 0 } };
+  const entity = putSampleWithinReach(game, 'ghost_shrimp');
+  entity.y = 2900;
+  entity.originY = 2900;
+  assert.equal(game.useAbility(), false);
+  assert.equal(game.nearestTarget, null);
+  assert.equal(game.scan(), true);
+  assert.equal(game.useAbility(), true);
+  assert.equal(game.getTargetRange(entity), 1150);
+  assert.equal(game.nearestTarget, entity);
+  assert.equal(game.capture(), true);
+  assert.equal(entity.alive, true);
+  assert.equal(entity.sampled, true);
+  assert.equal(game.cargo[0].fidelity, true);
+  assert.equal(game.cargo[0].nonInvasive, true);
+  assert.ok(game.cargoWeight <= game.getSpecies('ghost_shrimp').weight);
+  assert.equal(game.observations.ghost_shrimp.count, 1);
+  assert.equal(game.observations.ghost_shrimp.lastDepth, 2900);
+  game.captureCooldown = 0;
+  game.abilityCooldowns.ray = 0;
+  assert.equal(game.capture(), false);
+  assert.equal(game.useAbility(), false);
+  assert.equal(game.totalCaptures, 1);
+  game.save();
+  const restored = new Game({ storage });
+  assert.equal(restored.sampleStock.ghost_shrimp, 1);
+  assert.equal(restored.sampleFidelity.ghost_shrimp, 1);
+  assert.equal(restored.observations.ghost_shrimp.count, 1);
+  const restoredAgain = new Game({ storage });
+  assert.deepEqual(restoredAgain.sampleFidelity, restored.sampleFidelity);
+  assert.deepEqual(restoredAgain.sampleStock, restored.sampleStock);
+});
+
+test('ray survey prioritizes distinct species and records each live individual only once', () => {
+  const game = fresh();
+  game.vehicle = 'ray';
+  game.entities = ['glassfish', 'glassfish', 'glassfish', 'emberfin', 'moonjelly', 'ribbon_eel', 'lanternfish'].map((speciesId, index) => ({ id: `survey-${index}`, type: 'creature', alive: true, speciesId, x: 500 + index * 7, y: 100, originX: 500 + index * 7, originY: 100 }));
+  assert.equal(game.useAbility(), true);
+  const marked = game.entities.filter(entity => entity.biologicalScan);
+  assert.equal(marked.length, 5);
+  assert.equal(new Set(marked.map(entity => entity.speciesId)).size, 5);
+  game.elapsed = 20;
+  game.abilityCooldowns.ray = 0;
+  assert.equal(game.useAbility(), true);
+  assert.equal(game.observations.glassfish.count, 1);
+  assert.equal(game.observations.lanternfish.count, 1);
+});
+
+test('locked ray observations take precedence over closer duplicate animals and ordinary minerals', () => {
+  const game = fresh();
+  game.vehicle = 'ray';
+  game.player = { x: 490, y: 2000, facing: 1, heading: { x: 1, y: 0 } };
+  const creatures = [
+    ['lionfish', 20], ['lionfish', 25], ['seahorse', 200],
+    ['moonjelly', 300], ['glassfish', 400], ['emberfin', 500],
+  ].map(([speciesId, distance], index) => ({ id: `priority-${index}`, type: 'creature', alive: true, speciesId, x: 490, y: 2000 + distance, originX: 490, originY: 2000 + distance }));
+  const mineral = { id: 'ordinary-ore', type: 'mineral', alive: true, x: 505, y: 2000, amount: 2 };
+  game.entities = [mineral, ...creatures];
+  assert.equal(game.nearestTarget, mineral);
+  assert.equal(game.scan(), true);
+  assert.equal(game.useAbility(), true);
+  assert.equal(creatures[0].biologicalScan, true);
+  assert.equal(creatures[1].biologicalScan, undefined);
+  assert.equal(game.nearestTarget, creatures[0]);
+  assert.equal(game.capture(), true);
+  game.captureCooldown = 0;
+  assert.equal(game.nearestTarget, creatures[2]);
+  assert.equal(game.capture(), true);
+  assert.equal(creatures[1].alive, true);
+  assert.equal(creatures[1].sampled, undefined);
+  assert.equal(mineral.alive, true);
+  assert.equal(game.cargo.length, 2);
+  assert.ok(game.cargo.every(item => item.fidelity && item.nonInvasive));
+  game.elapsed = 19;
+  game.captureCooldown = 0;
+  assert.equal(game.nearestTarget, mineral);
+  assert.equal(game.capture(), true);
+  assert.equal(game.nearestTarget, creatures[1]);
+});
+
+test('fidelity is a bounded subset of sample stock and legacy inventories are not silently promoted', () => {
+  const storage = memoryStorage();
+  const game = new Game({ storage, load: false });
+  game.returnToBase();
+  game.sampleStock = { glassfish: 2, emberfin: 3 };
+  game.sampleFidelity = { glassfish: 999, moonjelly: 4 };
+  game.save();
+  const loaded = new Game({ storage });
+  assert.equal(loaded.sampleFidelity.glassfish, 2);
+  assert.equal(loaded.sampleFidelity.moonjelly, undefined);
+  assert.equal(loaded.sampleFidelity.emberfin, undefined);
+  loaded.sampleFidelity = {};
+  loaded.save();
+  assert.deepEqual(new Game({ storage }).sampleFidelity, {});
+});
+
+test('a single equipped bio module applies its exact tier effects without stacking unequipped modules', () => {
+  const game = fresh();
+  const original = { ...game.stats };
+  assert.equal(game.unlockBioModule('invalid', 1), false);
+  assert.equal(game.unlockBioModule('lumen', 2), true);
+  assert.equal(game.equipBioModule('lumen'), false);
+  assert.equal(game.stats.vision, original.vision);
+  game.returnToBase();
+  assert.equal(game.equipBioModule('lumen'), true);
+  assert.equal(game.stats.vision, original.vision * 1.35);
+  assert.equal(game.unlockBioModule('flow', 3), true);
+  assert.equal(game.stats.speed, original.speed);
+  assert.equal(game.equipBioModule('flow'), true);
+  assert.equal(game.stats.vision, original.vision);
+  assert.equal(game.stats.speed, original.speed * 1.24);
+  assert.equal(game.unlockBioModule('flow', 1), false);
+  assert.equal(game.bioModules.flow, 3);
+  assert.equal(game.unlockBioModule('shell', 99), true);
+  assert.equal(game.bioModules.shell, 3);
+  assert.equal(game.equipBioModule('shell'), true);
+  assert.equal(game.stats.speed, original.speed);
+  assert.equal(game.stats.maxDepth, original.maxDepth + 900);
+  assert.equal(game.equipBioModule(null), true);
+  assert.deepEqual(game.stats, original);
+});
+
+test('echo module extends sonar and repair only heals outside excess pressure', () => {
+  const game = fresh();
+  game.wonders = [];
+  game.returnToBase();
+  game.unlockBioModule('echo', 3);
+  game.equipBioModule('echo');
+  game.launch();
+  game.scan();
+  assert.equal(game.sonar.duration, 8);
+  assert.equal(game.sonar.cooldown, 9);
+  game.returnToBase();
+  game.unlockBioModule('repair', 2);
+  game.equipBioModule('repair');
+  game.launch();
+  game.hull = 50;
+  game.update(0.1);
+  assert.ok(Math.abs(game.hull - 50.06) < 1e-8);
+  game.player.y = game.stats.maxDepth + 700;
+  game.update(0.1);
+  assert.ok(Math.abs(game.hull - 49.56) < 1e-8);
+});
+
+test('module ownership and the selected slot persist, while reset clears all lab extensions', () => {
+  const storage = memoryStorage();
+  const game = new Game({ storage, load: false });
+  game.returnToBase();
+  for (const module of BIO_MODULES) game.unlockBioModule(module.id, 2);
+  game.equipBioModule('shell');
+  game.sampleStock = { glassfish: 2 };
+  game.sampleFidelity = { glassfish: 1 };
+  game.observations = { glassfish: { count: 1, firstDepth: 40, lastDepth: 40, behavior: 'school' } };
+  game.save();
+  const restored = new Game({ storage });
+  assert.equal(restored.equippedBioModule, 'shell');
+  assert.deepEqual(restored.bioModules, game.bioModules);
+  assert.equal(restored.stats.maxDepth, VEHICLES.moth.maxDepth + 650);
+  assert.deepEqual(restored.sampleFidelity, { glassfish: 1 });
+  restored.reset();
+  assert.deepEqual(restored.bioModules, {});
+  assert.equal(restored.equippedBioModule, null);
+  assert.deepEqual(restored.observations, {});
+  assert.deepEqual(restored.sampleFidelity, {});
 });
 
 test('whale drilling extracts more rock and cannot vacuum cave ore through the wall', () => {

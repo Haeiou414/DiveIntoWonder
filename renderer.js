@@ -1,4 +1,5 @@
 import { SPECIES, PAINTS } from './data.js';
+import { drawSpecies, getSpeciesArt } from './species-art.js';
 import { CANYON, CAVES, getCaveAt, hasLineOfSight } from './world.js';
 
 // The entire ocean is drawn at a deliberately low resolution. Its scenery is
@@ -45,54 +46,7 @@ function palette(depth) {
   return result;
 }
 function specimen(c, s, t=0, factor=1, facing=1) {
-  const color=s?.color||'#90e5d7', accent=s?.accent||'#f2e9b2', kind=s?.kind||'fish';
-  c.save();c.scale(factor*facing,factor);
-  if(kind==='jelly') {
-    const sway=Math.sin(t*2)*2;
-    for(let i=-3;i<=3;i++) {
-      line(c,[[i*3,3],[i*3+sway,10],[i*3-sway*.6,16+(i%2)*3],[i*3+sway,22]],i%2?color:accent,1);
-    }
-    poly(c,[[-13,0],[-11,-6],[-6,-11],[5,-11],[11,-6],[13,1],[9,4],[-9,4]],color);
-    rect(c,-9,-6,17,6,accent);rect(c,-6,-9,11,3,color);
-    rect(c,-8,1,3,3,accent);rect(c,0,2,3,3,accent);rect(c,7,1,3,3,accent);
-    rect(c,-5,-7,3,2,'#ffffff');
-  } else if(kind==='eel') {
-    const points=[];
-    for(let i=0;i<11;i++) points.push([-27+i*5,Math.sin(i*.65+t*3)*(5-i*.2)]);
-    line(c,points,color,5);line(c,points.map(([x,y])=>[x,y-2]),accent,1);
-    rect(c,19,-5,10,8,color);rect(c,25,-4,2,2,'#eaffef');rect(c,26,-4,1,1,'#112d40');
-  } else if(kind==='octopus'||kind==='squid') {
-    for(let i=-3;i<=3;i++) line(c,[[i*2,3],[i*3,10],[i*5+Math.sin(t*3+i)*3,13+Math.cos(i)*4],[i*5+Math.sin(t*3+i)*4,17]],i%2?accent:color,2);
-    poly(c,[[-9,3],[-10,-7],[-5,-15],[4,-15],[10,-8],[9,4],[5,8],[-5,8]],color);
-    if(kind==='squid') { poly(c,[[-8,-6],[-18,0],[-7,3]],accent);poly(c,[[8,-6],[17,0],[7,3]],accent); }
-    rect(c,-6,-9,8,3,accent);rect(c,-7,0,4,4,'#e8f4ef');rect(c,3,0,4,4,'#e8f4ef');rect(c,-5,1,2,2,'#193046');rect(c,4,1,2,2,'#193046');
-  } else if(kind==='ray') {
-    const flap=Math.sin(t*2)*4;
-    poly(c,[[-24,-3+flap],[-9,-7],[-2,-11],[7,-6],[25,-3+flap],[12,5],[3,8],[-9,6]],color);
-    poly(c,[[-18,-1+flap],[-5,-5],[-2,6]],accent);poly(c,[[18,-1+flap],[5,-5],[2,6]],accent);
-    line(c,[[0,7],[1,17],[Math.sin(t)*3,25]],color,2);rect(c,-4,-5,2,2,'#d9ffff');rect(c,3,-5,2,2,'#d9ffff');
-  } else if(kind==='whale') {
-    poly(c,[[-39,-3],[-30,-12],[-9,-17],[20,-12],[35,-4],[39,6],[25,12],[2,14],[-28,8],[-40,2],[-48,-8],[-50,9]],color);
-    poly(c,[[-28,5],[1,9],[33,4],[27,10],[0,12]],accent);poly(c,[[-5,7],[10,23],[16,18],[11,8]],color);
-    rect(c,26,-2,3,3,'#e8ffff');rect(c,28,-2,1,2,'#123343');line(c,[[19,7],[29,6],[35,3]],accent);
-  } else if(kind==='crab') {
-    for(let i=0;i<3;i++) { line(c,[[-7,i*3-1],[-15,i*5-3],[-18,i*5]],accent,2);line(c,[[7,i*3-1],[15,i*5-3],[18,i*5]],accent,2); }
-    rect(c,-8,-5,17,12,color);rect(c,-5,-8,11,4,accent);
-    line(c,[[-7,-3],[-14,-10],[-17,-13]],color,3);line(c,[[7,-3],[14,-10],[17,-13]],color,3);
-    rect(c,-20,-15,7,6,accent);rect(c,14,-15,7,6,accent);rect(c,-6,-7,3,3,'#ffffff');rect(c,4,-7,3,3,'#ffffff');
-  } else if(kind==='shrimp') {
-    poly(c,[[-14,3],[-8,-6],[3,-7],[11,-1],[13,5],[3,7],[-7,7]],color);
-    for(let i=-2;i<4;i++)line(c,[[i*3,5],[i*3+2,11]],accent);
-    line(c,[[10,-2],[19,-8],[24,-9]],accent);line(c,[[9,-3],[15,-12],[20,-14]],accent);
-    rect(c,8,-4,3,3,'#ffffff');poly(c,[[-12,2],[-20,-3],[-20,8]],accent);
-  } else {
-    poly(c,[[-14,0],[-22,-7],[-22,7]],color);
-    poly(c,[[-14,-4],[-6,-8],[7,-8],[15,-3],[18,1],[12,6],[-6,7],[-14,3]],color);
-    poly(c,[[-6,-7],[0,-13],[5,-8]],accent);poly(c,[[-4,6],[3,12],[7,6]],accent);
-    rect(c,-9,-3,18,2,accent);rect(c,9,-4,4,4,'#edfff5');rect(c,11,-3,2,2,'#163344');
-    rect(c,-17,-2,3,4,accent);
-  }
-  c.restore();
+  return drawSpecies(c,s||{},t,factor,facing);
 }
 function submarine(c, id, t=0, facing=1, moving=false, paintId='classic') {
   c.save();c.scale(facing,1);
@@ -141,7 +95,8 @@ export function drawSpecimen(canvas, speciesId, scale=1) {
   if(!canvas)return;
   const c=canvas.getContext('2d'),w=canvas.width||100,h=canvas.height||80;
   c.clearRect(0,0,w,h);c.imageSmoothingEnabled=false;c.save();c.translate(Math.round(w/2),Math.round(h/2));
-  const s=speciesById.get(speciesId);specimen(c,s,0,Math.min(w/64,h/56)*scale,1);c.restore();
+  const s=speciesById.get(speciesId)||{},art=getSpeciesArt(s);
+  specimen(c,s,0,Math.min(w/art.width,h/art.height)*scale,1);c.restore();
 }
 export function drawVehicle(canvas, vehicleId, paintId='classic') {
   if(!canvas)return;
@@ -199,12 +154,14 @@ export class OceanRenderer {
     const nearby=[];
     for(const e of game.entities||[]) {
       if(e.alive===false)continue;
-      const [x,y]=this.world(e.x,e.y);if(y<-65||y>h+65)continue;
+      const [worldX,worldY]=this.world(e.x,e.y),pose=e.type==='creature'?this.creaturePose(e,worldX,worldY):{x:worldX,y:worldY};
+      const {x,y}=pose;if(y<-90||y>h+90)continue;
       if(!this.entityVisible(game,e))continue;
-      const dist=Math.hypot(e.x-player.x,e.y-player.y),range=game.stats?.captureRange||100;
-      if(dist<=range)nearby.push({e,x,y,dist});
+      const dist=Math.hypot(e.x-player.x,e.y-player.y),range=typeof game.getTargetRange==='function'?game.getTargetRange(e):game.stats?.captureRange||100;
+      const accessible=!e.caveId||(game.vehicle==='moth'&&game.currentCave?.id===e.caveId);
+      if(!e.sampled&&accessible&&dist<=range)nearby.push({e,x,y,dist});
       // Sonar-only contacts are drawn as echoes after the darkness, not lit fish.
-      if(this.illuminated(game,e.x,e.y))this.entity(e,x,y,t,p);
+      if(this.illuminated(game,e.x,e.y))this.entity(e,worldX,worldY,t,p);
     }
     this.particles(p,t,player.y);
     this.renderEffects(t);
@@ -415,6 +372,15 @@ export class OceanRenderer {
       }
     }c.globalAlpha=1;
   }
+  creaturePose(e,x,y) {
+    const s=speciesById.get(e.speciesId)||{},art=getSpeciesArt(s),size=art.worldScale;
+    const grounded=art.anchored||['benthic','sessile'].includes(e.behavior||s.behavior),attachment=e.attachment;
+    if(!grounded||!attachment)return {x,y,rotation:0};
+    const feet=(art.supportY||art.height*.35)*size;
+    if(attachment.side==='floor')return {x,y:this.world(e.x,attachment.anchorY)[1]-feet,rotation:0};
+    const anchorX=this.world(attachment.anchorX,e.y)[0],direction=attachment.side==='left'?1:-1;
+    return {x:anchorX+direction*feet,y,rotation:direction*Math.PI/2};
+  }
   entity(e,x,y,t,p) {
     const c=this.c,seed=hash(e.id),phase=t+seed;
     if(e.type==='mineral') {
@@ -431,12 +397,22 @@ export class OceanRenderer {
       rect(c,0,-12,1,5,'#e2efcd');if(Math.sin(t*2+seed)>.94)rect(c,-1,-16,2,2,'#e9ffe3');
       c.restore();return;
     }
-    const s=speciesById.get(e.speciesId)||{},size=s.kind==='whale'?.8:s.kind==='squid'&&e.speciesId==='leviathan'?1.5:.65+((s.size||1)>8?.15:0);
-    const bob=Math.sin(phase*1.5)*3;
-    if(['jelly','squid','octopus'].includes(s.kind)) {
+    const s=speciesById.get(e.speciesId)||{},art=getSpeciesArt(s),size=art.worldScale;
+    const grounded=art.anchored||['benthic','sessile'].includes(e.behavior||s.behavior),pose=this.creaturePose(e,x,y);
+    if(grounded&&e.attachment?.wallSide){
+      const a=e.attachment,[wx,wy]=this.world(a.wallAnchorX,a.anchorY),[ax]=this.world(a.anchorX,a.anchorY),dir=a.wallSide==='left'?1:-1;
+      poly(c,[[wx,wy-2],[ax+dir*11,wy-2],[ax+dir*15,wy+4],[ax,wy+10],[wx,wy+13]],p.rock);
+      line(c,[[wx,wy-2],[ax+dir*11,wy-2]],p.rim,2);
+    }
+    x=pose.x;y=pose.y;
+    const bob=grounded?0:Math.sin(phase*(s.behavior==='pulse'?2.1:s.behavior==='jet'?2.8:1.1))*art.bob;
+    if(art.emissive) {
       const a=c.createRadialGradient(x,y,0,x,y,26);a.addColorStop(0,`${s.color||'#75c9d1'}22`);a.addColorStop(1,`${s.color||'#75c9d1'}00`);c.fillStyle=a;c.fillRect(x-27,y-27,54,54);
     }
-    c.save();c.translate(x,y+bob);specimen(c,s,phase,size,rnd(seed)>.5?1:-1);c.restore();
+    c.save();c.translate(x,y+bob);c.rotate(pose.rotation);
+    specimen(c,s,phase,size,Number.isFinite(e.facing)?e.facing:rnd(seed)>.5?1:-1);c.restore();
+    if(e.sampled){line(c,[[x+12,y-15],[x+14,y-12],[x+19,y-18]],'#80b8a6');}
+    else if(e.surveyUntil>(this.game?.elapsed||0)){c.globalAlpha=.7;for(const side of [-1,1])line(c,[[x+side*18,y-11],[x+side*18,y-15],[x+side*13,y-15]],'#c9b3e6');c.globalAlpha=1;}
   }
   particles(p,t,depth) {
     const c=this.c,w=this.width,h=this.height;
@@ -525,7 +501,8 @@ export class OceanRenderer {
     for(const e of game.entities||[]) {
       if(e.alive===false||(e.scannedUntil||0)<=(game.elapsed||0)||!this.entityVisible(game,e)||this.illuminated(game,e.x,e.y))continue;
       if(Math.hypot(e.x-origin.x,e.y-origin.y)>waveRadius)continue;
-      const [x,y]=this.world(e.x,e.y);if(y<-20||y>this.height+20)continue;
+      const [wx,wy]=this.world(e.x,e.y),pose=e.type==='creature'?this.creaturePose(e,wx,wy):{x:wx,y:wy};
+      const {x,y}=pose;if(y<-20||y>this.height+20)continue;
       const echoStrength=clamp(((e.scannedUntil||0)-(game.elapsed||0))/.8,0,1);
       c.globalAlpha=echoStrength*(.35+.12*Math.sin(t*4+hash(e.id)));c.strokeStyle=e.biologicalScan?'#c1a8dc':e.type==='mineral'?'#a6bd9b':'#81c6bc';
       const echo=e.type==='mineral'?[[x,y-4],[x+4,y],[x,y+4],[x-4,y],[x,y-4]]:[[x-6,y],[x-2,y-3],[x+5,y],[x-2,y+3],[x-6,y]];
@@ -538,7 +515,8 @@ export class OceanRenderer {
     c.globalAlpha=.75;
     for(const sx of [-1,1])for(const sy of [-1,1])line(c,[[x+sx*r,y+sy*(r-5)],[x+sx*r,y+sy*r],[x+sx*(r-5),y+sy*r]],color);
     c.globalAlpha=1;
-    const label=e.type==='mineral'?'E  采集':'E  捕获';
+    const observation=this.game?.isObservationTarget?.(e);
+    const label=e.type==='mineral'?'E  采集':observation?'E  无损观测':'E  捕获';
     c.font='8px monospace';c.textAlign='center';const ww=c.measureText(label).width+10;rect(c,x-ww/2,y+r+7,ww,14,'#062a35cc');c.fillStyle='#d4eee3';c.fillText(label,x,y+r+17);
   }
   wonders(game,p,t) {

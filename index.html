@@ -9,13 +9,14 @@
   <link rel="icon" href="./favicon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="./styles.css">
   <link rel="stylesheet" href="./expansion.css">
+  <link rel="stylesheet" href="./chamber.css">
 </head>
 <body>
   <header class="site-header">
     <a class="brand" href="#explore" aria-label="潜行绮遇，返回探索"><span class="brand-mark" aria-hidden="true"><i></i><b></b></span><span><strong>潜行绮遇<span class="brand-dot">.</span></strong><small>DIVE INTO WONDER</small></span></a>
     <nav class="main-nav" aria-label="主要导航">
       <button class="nav-item active" data-view="explore"><span data-icon="compass"></span>深海探索</button>
-      <button class="nav-item" data-view="station"><span data-icon="flask"></span>科研值班<span class="nav-counter" id="sample-count">0</span></button>
+      <button class="nav-item" data-view="station"><span data-icon="flask"></span>共鸣演化<span class="nav-counter" id="sample-count">0</span></button>
       <button class="nav-item" data-view="hangar"><span data-icon="ship"></span>载具船坞</button>
       <button class="nav-item" data-view="research"><span data-icon="dna"></span>基因实验室</button>
       <button class="nav-item" data-view="codex"><span data-icon="book"></span>深海图鉴<span class="nav-counter" id="codex-count">0</span></button>
@@ -65,11 +66,11 @@
       </div>
       <div class="expedition-strip">
         <div class="journey-level"><span class="level-badge" id="level-badge">01</span><div><div class="strip-label">探索者等级 <b id="rank-name">新晋潜航员</b></div><div class="xp-row"><div class="meter"><i id="xp-bar"></i></div><span id="xp-label">0 / 100 XP</span></div></div></div>
-        <div class="expedition-stats"><div><span>本次捕获</span><strong id="trip-captures">00<small>只</small></strong></div><div><span>最深足迹</span><strong id="record-depth">100<small>m</small></strong></div><div><span>已识生物</span><strong id="species-count">00<small>/ 20</small></strong></div></div>
+        <div class="expedition-stats"><div><span>本次捕获</span><strong id="trip-captures">00<small>只</small></strong></div><div><span>最深足迹</span><strong id="record-depth">100<small>m</small></strong></div><div><span>已识生物</span><strong id="species-count">00<small>/ 30</small></strong></div></div>
         <button class="discovery-teaser" id="discovery-teaser"><span class="teaser-symbol">✧</span><span><small>未知，值得期待</small><b id="discovery-teaser-text">下一个奇遇，就在更深处</b></span><span class="teaser-arrow">↗</span></button>
       </div>
     </section>
-    <section id="station-view" class="view content-view" aria-label="基地科研值班" hidden></section>
+    <section id="station-view" class="view content-view" aria-label="基地共鸣演化" hidden></section>
     <section id="hangar-view" class="view content-view" aria-label="载具船坞" hidden></section>
     <section id="research-view" class="view content-view" aria-label="基因实验室" hidden></section>
     <section id="codex-view" class="view content-view" aria-label="深海图鉴" hidden></section>

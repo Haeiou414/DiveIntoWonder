@@ -1,12 +1,13 @@
 import { ZONES, SPECIES, VEHICLES, GENES, UPGRADES, WONDERS, PAINTS } from './data.js';
-import { CAVES, HOTSPOTS, getCaveAt, hasLineOfSight, moveWithCollision, wallX } from './world.js';
+import { CAVES, HOTSPOTS, getCaveAt, hasLineOfSight, isWater, moveWithCollision, wallX } from './world.js';
+import { BIO_MODULES, getBioModuleEffect } from './bio-modules.js';
 
 const SAVE_KEY = 'dive-into-wonder-v1';
 const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
 const speciesById = Object.fromEntries(SPECIES.map(species => [species.id, species]));
 const depthMilestones = [350, 900, 1800, 3500, 5000, 7500, 10500];
 const captureMilestones = [3, 8, 16, 28, 45, 70, 100];
-const collectionMilestones = [3, 6, 10, 14, 18];
+const collectionMilestones = [...new Set([3, 6, 10, 14, 18, 24, 30, SPECIES.length])].filter(count => count <= SPECIES.length).sort((a, b) => a - b);
 
 export class Game {
   constructor(options = {}) {
@@ -50,10 +51,15 @@ export class Game {
     this.abilityCooldowns = { moth: 0, ray: 0, whale: 0 };
     this.dashRemaining = 0;
     this.detectedHotspots = {};
+    this.ecologicalHotspots = [];
     this.caveDiscoveries = [];
     this.unlockedPaints = ['classic'];
     this.paintByVehicle = { moth: 'classic', ray: 'classic', whale: 'classic' };
     this.sampleStock = {};
+    this.sampleFidelity = {};
+    this.observations = {};
+    this.bioModules = {};
+    this.equippedBioModule = null;
     this.labState = null;
     this.labProcessed = 0;
     this.labRuns = 0;
@@ -87,12 +93,13 @@ export class Game {
   get stats() {
     const vehicle = VEHICLES[this.vehicle];
     const pressureVehicle = this.tetherConnected ? VEHICLES.whale : vehicle;
+    const module = this.bioModuleEffect;
     return {
-      maxDepth: pressureVehicle.maxDepth + this.upgrades.hull * 900,
+      maxDepth: pressureVehicle.maxDepth + this.upgrades.hull * 900 + (module.depthBonus ?? 0),
       battery: vehicle.battery + this.upgrades.battery * 65,
       cargo: vehicle.cargo + this.upgrades.cargo * 8 + (this.researched.includes('elastic') ? 10 : 0),
-      speed: vehicle.speed * (1 + this.upgrades.thruster * 0.15) * (this.researched.includes('streamline') ? 1.15 : 1),
-      vision: vehicle.vision * (this.researched.includes('lumen') ? 1.3 : 1),
+      speed: vehicle.speed * (1 + this.upgrades.thruster * 0.15) * (this.researched.includes('streamline') ? 1.15 : 1) * (module.speedMultiplier ?? 1),
+      vision: vehicle.vision * (this.researched.includes('lumen') ? 1.3 : 1) * (module.visionMultiplier ?? 1),
       captureRange: vehicle.captureRange * (this.researched.includes('echo') ? 1.25 : 1),
     };
   }
@@ -106,6 +113,7 @@ export class Game {
   get tetherConnected() { return Boolean(this.carrier && this.tetherDistance <= this.carrier.tetherRange); }
   get currentCave() { return getCaveAt(this.player.x, this.player.y); }
   get paintId() { return this.paintByVehicle[this.vehicle] ?? 'classic'; }
+  get bioModuleEffect() { return getBioModuleEffect(this.equippedBioModule, this.bioModules[this.equippedBioModule] ?? 0); }
   get visibility() {
     const depth = this.player.y;
     const ambientRadius = depth < 200 ? 640 : depth < 1000 ? 105 : depth < 4000 ? 52 : 38;
@@ -127,15 +135,17 @@ export class Game {
   }
 
   get contacts() {
-    return HOTSPOTS.filter(spot => (this.detectedHotspots[spot.id] ?? 0) > this.elapsed)
+    return this.hotspots.filter(spot => (this.detectedHotspots[spot.id] ?? 0) > this.elapsed)
       .map(spot => ({ ...spot, expiresAt: this.detectedHotspots[spot.id], distance: Math.hypot(spot.x - this.player.x, spot.y - this.player.y) }))
       .sort((a, b) => a.distance - b.distance);
   }
 
+  get hotspots() { return [...HOTSPOTS, ...this.ecologicalHotspots]; }
+
   get activeAbility() {
     const abilities = {
       moth: { name: '窄域冲刺', description: '消耗 10 电量，2 秒灵巧冲刺。萤蛾号可通过洞穴狭口。' },
-      ray: { name: '生物断层扫描', description: '消耗 12 电量，标记附近 3 份生物样本，采集后额外获得科研点。' },
+      ray: { name: '活体谱系勘测', description: '消耗 12 电量，锁定已探明的至多 5 份活体，优先不同物种。18 秒内按 E 远距记录高完整度样本；生物不会被带走。' },
       whale: { name: '连锁破岩', description: '消耗 15 电量，开采前方 3 处岩壁矿脉，矿物产出提高。' },
     };
     const cooldown = this.abilityCooldowns[this.vehicle] ?? 0;
@@ -144,14 +154,51 @@ export class Game {
 
   get nearestTarget() {
     let nearest = null;
-    let best = this.stats.captureRange;
+    let best = Infinity;
+    let bestPriority = Infinity;
     for (const entity of this.entities) {
-      if (!entity.alive || !this.isEntityVisible(entity)) continue;
+      if (!entity.alive || entity.sampled || !this.isEntityVisible(entity)) continue;
       if (entity.caveId && (this.vehicle !== 'moth' || this.currentCave?.id !== entity.caveId)) continue;
       const distance = Math.hypot(entity.x - this.player.x, entity.y - this.player.y);
-      if (distance < best) { nearest = entity; best = distance; }
+      if (distance >= this.getTargetRange(entity)) continue;
+      const priority = this.isObservationTarget(entity) ? 0 : 1;
+      if (priority < bestPriority || priority === bestPriority && distance < best) {
+        nearest = entity;
+        best = distance;
+        bestPriority = priority;
+      }
     }
     return nearest;
+  }
+
+  isObservationTarget(entity) {
+    return this.vehicle === 'ray' && entity?.type === 'creature' && !entity.caveId && !entity.sampled
+      && entity.biologicalScan && (entity.surveyUntil ?? 0) > this.elapsed;
+  }
+
+  getTargetRange(entity) {
+    return this.isObservationTarget(entity) ? 1150 * (this.researched.includes('echo') ? 1.15 : 1) : this.stats.captureRange;
+  }
+
+  equipBioModule(id) {
+    if (!this.docked) { this.emit('info', '仿生模块需要港口安装', '返回基地后可选择一个生效的仿生模块。'); return false; }
+    if (id !== null && (!BIO_MODULES.some(module => module.id === id) || !Object.hasOwn(this.bioModules, id) || this.bioModules[id] <= 0)) return false;
+    this.equippedBioModule = id;
+    const module = BIO_MODULES.find(item => item.id === id);
+    this.emit('module', module ? `${module.name}已装备` : '仿生模块已卸下', module ? module.levels[this.bioModules[id] - 1] : '下潜时只有当前装备的一个模块生效。');
+    this.save();
+    return true;
+  }
+
+  unlockBioModule(id, level = 1) {
+    const module = BIO_MODULES.find(item => item.id === id);
+    if (!module || !Number.isFinite(level) || level < 1) return false;
+    const nextLevel = Math.min(3, Math.floor(level));
+    if ((this.bioModules[id] ?? 0) >= nextLevel) return false;
+    this.bioModules[id] = nextLevel;
+    this.emit('module', `${module.name} · 阶段 ${nextLevel}`, `${module.levels[nextLevel - 1]}。返回港口选择装备，只有一个模块可同时生效。`, { moduleId: id, level: nextLevel });
+    this.save();
+    return true;
   }
 
   getSpecies(id) { return speciesById[id]; }
@@ -169,12 +216,52 @@ export class Game {
     return x - Math.floor(x);
   }
 
+  speciesDepthRange(species) {
+    const zone = ZONES.find(item => item.id === species.zone) ?? ZONES[0];
+    const range = species.depthRange;
+    if (Array.isArray(range) && range.length === 2 && range.every(Number.isFinite)) return [Math.max(20, zone.min, range[0]), Math.min(10960, zone.max, range[1])];
+    return [Math.max(20, zone.min + 25), Math.min(10960, zone.max - 25)];
+  }
+
   spawnWorld() {
     this.entities = [];
+    this.ecologicalHotspots = [];
     let seed = 37 + this.totalDives * 103;
     const creatureCounts = [14, 15, 19, 10, 24];
+    const speciesHabitats = {};
+    for (const species of SPECIES) {
+      const [minimum, maximum] = this.speciesDepthRange(species);
+      let habitats = this.hotspots.filter(spot => spot.y >= minimum && spot.y <= maximum);
+      if (!habitats.length) {
+        const depth = Math.round((minimum + maximum) / 2);
+        const habitat = { id: `habitat_${species.id}`, name: `${ZONES.find(zone => zone.id === species.zone)?.name ?? '深海'}生态群落`, x: 500, y: depth, type: 'ecology' };
+        this.ecologicalHotspots.push(habitat);
+        habitats = [habitat];
+      }
+      speciesHabitats[species.id] = habitats;
+    }
     const addCreature = (species, x, y, extra = {}) => {
-      this.entities.push({ id: `e${this.entitySequence++}`, type: 'creature', speciesId: species.id, x, y, originX: x, originY: y, phase: this.random(seed++) * Math.PI * 2, alive: true, size: species.size, color: species.color, scannedUntil: 0, ...extra });
+      if (!species) return;
+      const depthRange = this.speciesDepthRange(species);
+      y = clamp(y, depthRange[0], depthRange[1]);
+      const behavior = species.behavior ?? ({ jelly: 'pulse', squid: 'jet', crab: 'benthic' }[species.kind] ?? 'cruise');
+      let attachment;
+      if (behavior === 'benthic' || behavior === 'sessile') {
+        const cave = CAVES.find(item => item.id === extra.caveId);
+        if (cave) {
+          y = clamp(cave.bounds.bottom - 22, depthRange[0], depthRange[1]);
+          attachment = { side: 'floor', anchorX: x, anchorY: cave.bounds.bottom };
+        } else {
+          const side = this.random(seed++) < 0.5 ? 'left' : 'right';
+          const anchorX = wallX(side);
+          const standing = ['sea_pen', 'tripod_fish', 'feather_star'].includes(species.id);
+          x = anchorX + (side === 'left' ? 1 : -1) * (standing ? 38 : 18);
+          attachment = standing
+            ? { side: 'floor', anchorX: x, anchorY: y + species.size * 0.5, wallSide: side, wallAnchorX: anchorX }
+            : { side, anchorX, anchorY: y };
+        }
+      }
+      this.entities.push({ id: `e${this.entitySequence++}`, type: 'creature', speciesId: species.id, x, y, originX: x, originY: y, behavior, depthRange, attachment, phase: this.random(seed++) * Math.PI * 2, alive: true, size: species.size, color: species.color, scannedUntil: 0, ...extra });
     };
     const addMineral = (side, y, amount, extra = {}) => {
       const anchorX = wallX(side);
@@ -183,14 +270,16 @@ export class Game {
     };
     for (const [zoneIndex, zone] of ZONES.entries()) {
       const species = SPECIES.filter(item => item.zone === zone.id);
-      const spots = HOTSPOTS.filter(spot => spot.y >= zone.min && spot.y < zone.max);
-      for (let i = 0; i < creatureCounts[zoneIndex]; i++) {
+      const spots = this.hotspots.filter(spot => spot.y >= zone.min && spot.y < zone.max);
+      for (let i = 0; i < Math.max(creatureCounts[zoneIndex], species.length); i++) {
         const creature = species[i % species.length];
-        const spot = spots[i % spots.length];
+        const habitats = speciesHabitats[creature.id];
+        const spot = habitats[Math.floor(i / species.length) % habitats.length];
+        const [minimum, maximum] = this.speciesDepthRange(creature);
         // Deep life clusters around energy sources, leaving long, quiet passages.
         const y = zoneIndex < 2
-          ? zone.min + 32 + this.random(seed++) * (zone.max - zone.min - 64)
-          : clamp(spot.y + (this.random(seed++) - 0.5) * 260, zone.min + 30, zone.max - 30);
+          ? minimum + this.random(seed++) * (maximum - minimum)
+          : clamp(spot.y + (this.random(seed++) - 0.5) * 260, minimum, maximum);
         const x = zoneIndex < 2 ? 150 + this.random(seed++) * 700 : clamp(spot.x + (this.random(seed++) - 0.5) * 260, 150, 850);
         addCreature(creature, x, y, { hotspotId: spot.id });
       }
@@ -208,8 +297,12 @@ export class Game {
     addMineral('left', 245, 3);
     for (const [index, cave] of CAVES.entries()) {
       const x = (cave.bounds.left + cave.bounds.right) / 2;
-      const species = speciesById[['umbrella_octopus', 'crystal_jelly', 'siphonophore'][index]];
-      addCreature(species, x, cave.y - 35, { caveId: cave.id, hotspotId: cave.id, drift: 5, researchBonus: 15 + index * 20, sampleCondition: 'pristine' });
+      const eligible = SPECIES.filter(species => {
+        const [minimum, maximum] = this.speciesDepthRange(species);
+        return minimum <= cave.y - 35 && maximum >= cave.y + 60;
+      });
+      const species = eligible.find(item => item.id === ['umbrella_octopus', 'crystal_jelly', 'ghost_whale'][index]) ?? eligible[0];
+      if (species) addCreature(species, x, cave.y - 35, { caveId: cave.id, hotspotId: cave.id, drift: 5, researchBonus: 15 + index * 20, sampleCondition: 'pristine' });
       const y = cave.bounds.bottom - 12;
       this.entities.push({ id: `e${this.entitySequence++}`, type: 'mineral', material: 'alloy', x, y, originX: x, originY: y, alive: true, amount: 5 + index * 5, size: 15, caveId: cave.id, hotspotId: cave.id, scannedUntil: 0, attachment: { side: 'floor', anchorX: x, anchorY: cave.bounds.bottom } });
     }
@@ -246,7 +339,8 @@ export class Game {
     const pressure = Math.max(0, (this.player.y - safeDepth) / 700);
     const consumption = (moving ? 0.85 : 0.28) * (this.researched.includes('metabolism') ? 0.75 : 1) + (this.boost ? 1.4 : 0) + pressure * 0.9;
     this.battery = Math.max(0, this.battery - consumption * delta);
-    this.hull = clamp(this.hull - pressure * 5 * delta + (!pressure && this.researched.includes('repair') ? delta : 0), 0, 100);
+    const repairRate = (this.researched.includes('repair') ? 1 : 0) + (this.bioModuleEffect.repairRate ?? 0);
+    this.hull = clamp(this.hull - pressure * 5 * delta + (!pressure ? repairRate * delta : 0), 0, 100);
     if (pressure > 0 && this.warningCooldown <= 0) {
       this.emit('warning', '超过安全深度', `当前艇壳额定 ${safeDepth.toLocaleString()} 米。请上浮、靠近母舰或返回港口升级。`);
       this.warningCooldown = 14;
@@ -260,12 +354,9 @@ export class Game {
     }
     for (const entity of this.entities) {
       if (!entity.alive || entity.type !== 'creature' || Math.abs(entity.y - this.player.y) > 1100) continue;
-      const drift = entity.drift ?? 27;
-      entity.x = entity.originX + Math.sin(this.elapsed * 0.42 + entity.phase) * drift;
-      entity.y = entity.originY + Math.cos(this.elapsed * 0.3 + entity.phase) * Math.min(drift, 9);
-      entity.facing = Math.cos(this.elapsed * 0.42 + entity.phase) > 0 ? 1 : -1;
+      this.moveCreature(entity);
     }
-    for (const hotspot of HOTSPOTS) {
+    for (const hotspot of this.hotspots) {
       if (this.isEntityVisible(hotspot)) this.detectedHotspots[hotspot.id] = this.elapsed + 20;
     }
     for (const wonder of this.wonders) {
@@ -278,6 +369,58 @@ export class Game {
     if (this.battery <= 0 || this.hull <= 0) this.returnToBase(true);
   }
 
+  moveCreature(entity) {
+    const species = speciesById[entity.speciesId];
+    const behavior = entity.behavior ?? species.behavior ?? 'cruise';
+    const t = this.elapsed;
+    const phase = entity.phase ?? 0;
+    let dx = 0;
+    let dy = 0;
+    if (entity.caveId) {
+      if (behavior === 'benthic') dx = Math.sin(t * 0.2 + phase) * 7;
+      else if (behavior !== 'sessile') {
+        dx = Math.sin(t * 0.4 + phase) * 5;
+        dy = Math.cos(t * 0.3 + phase) * 5;
+      }
+    } else if (entity.attachment?.side === 'floor') {
+      if (behavior === 'benthic') dx = Math.sin(t * 0.13 + phase) * 6;
+    } else if (behavior === 'school') {
+      const schoolPhase = SPECIES.indexOf(species) * 0.7;
+      dx = Math.sin(t * 0.6 + schoolPhase) * 42;
+      dy = Math.cos(t * 0.36 + schoolPhase) * 12;
+    } else if (behavior === 'drift') {
+      dx = Math.sin(t * 0.12 + phase) * 20;
+      dy = Math.cos(t * 0.1 + phase) * 20;
+    } else if (behavior === 'pulse') {
+      dx = Math.sin(t * 0.2 + phase) * 13;
+      dy = Math.sin(t * 0.75 + phase) * 14;
+    } else if (behavior === 'jet') {
+      dx = Math.sin(t * 0.75 + phase) ** 3 * 60;
+      dy = Math.cos(t * 0.3 + phase) * 15;
+    } else if (behavior === 'benthic') {
+      dx = Math.sin(t * 0.2 + phase) * 3;
+      dy = Math.sin(t * 0.13 + phase) * 18;
+    } else if (behavior !== 'sessile') {
+      dx = Math.sin(t * 0.32 + phase) * 55;
+      dy = Math.cos(t * 0.19 + phase) * 14;
+    }
+    const range = entity.depthRange ?? this.speciesDepthRange(species);
+    let nextX = entity.originX + dx;
+    let nextY = clamp(entity.originY + dy, range[0], range[1]);
+    if (entity.caveId) {
+      const cave = CAVES.find(item => item.id === entity.caveId);
+      if (cave) {
+        nextX = clamp(nextX, cave.bounds.left + 12, cave.bounds.right - 12);
+        nextY = clamp(nextY, Math.max(range[0], cave.bounds.top + 12), Math.min(range[1], cave.bounds.bottom - 12));
+      }
+    } else nextX = clamp(nextX, 103, 897);
+    if (isWater(nextX, nextY)) {
+      if (Math.abs(nextX - entity.x) > 0.001) entity.facing = nextX > entity.x ? 1 : -1;
+      entity.x = nextX;
+      entity.y = nextY;
+    }
+  }
+
   capture() {
     if (this.docked || this.paused || this.captureCooldown > 0) return false;
     const entity = this.nearestTarget;
@@ -286,10 +429,11 @@ export class Game {
   }
 
   collectEntity(entity, { miningMultiplier = this.vehicle === 'whale' ? 1.5 : 1, energyCost = 2 } = {}) {
-    if (!entity?.alive || !this.isEntityVisible(entity)) return false;
+    if (!entity?.alive || entity.sampled || !this.isEntityVisible(entity)) return false;
     if (entity.caveId && (this.vehicle !== 'moth' || this.currentCave?.id !== entity.caveId)) return false;
     const species = entity.type === 'creature' ? speciesById[entity.speciesId] : null;
-    const weight = species?.weight ?? 1;
+    const observation = species && this.isObservationTarget(entity);
+    const weight = observation ? Math.max(1, Math.ceil(species.weight * 0.4)) : species?.weight ?? 1;
     if (this.cargoWeight + weight > this.stats.cargo) { this.emit('warning', '样本舱已满', '按 R 返航结算，或升级样本舱以增加负载。'); return false; }
     if (this.carrier) {
       const storedWeight = this.carrier.cargo.reduce((sum, item) => sum + (item.weight ?? 1) * (item.count ?? 1), 0);
@@ -299,10 +443,13 @@ export class Game {
     if (this.battery < energyCost) { this.emit('warning', '采集电量不足', '按 R 返回港口补给。'); return false; }
     this.captureCooldown = species ? 0.45 : this.vehicle === 'whale' ? 0.2 : 0.85;
     this.battery = Math.max(0, this.battery - energyCost);
-    entity.alive = false;
+    entity.sampled = true;
+    entity.alive = Boolean(observation);
     if (species) {
-      const initialResearch = Math.max(1, Math.floor(species.research * 0.2)) + (entity.researchBonus ?? 0);
-      this.cargo.push({ speciesId: species.id, count: 1, weight, value: species.value, research: initialResearch, researchBonus: entity.researchBonus ?? 0, sampleCondition: entity.sampleCondition ?? 'fresh' });
+      const researchBonus = observation || entity.sampleCondition === 'pristine' ? entity.researchBonus ?? 0 : 0;
+      const initialResearch = Math.max(1, Math.floor(species.research * 0.2)) + researchBonus;
+      const sampleCondition = observation ? 'scanned' : entity.sampleCondition === 'pristine' ? 'pristine' : 'fresh';
+      this.cargo.push({ speciesId: species.id, count: 1, weight, value: species.value, research: initialResearch, researchBonus, sampleCondition, fidelity: Boolean(observation), nonInvasive: Boolean(observation) });
       this.expedition.captures++;
       this.expedition.credits += species.value;
       this.expedition.research += initialResearch;
@@ -311,7 +458,7 @@ export class Game {
       const isNew = !this.discoveries.includes(species.id);
       if (isNew) this.discoveries.push(species.id);
       this.addXp(species.xp + (isNew ? 18 : 0));
-      this.emit(isNew ? 'discovery' : 'capture', isNew ? `新发现 · ${species.name}` : `采集成功 · ${species.name}`, `+${species.value} 信用点 · +${initialResearch} 初检科研点。返航后可在科研值班中处理样本。`, { speciesId: species.id, entityId: entity.id, x: entity.x, y: entity.y, sampleCondition: entity.sampleCondition ?? 'fresh' });
+      this.emit(isNew ? 'discovery' : 'capture', isNew ? `新发现 · ${species.name}` : `${observation ? '活体观测' : '采集成功'} · ${species.name}`, `+${species.value} 信用点 · +${initialResearch} 初检科研点。${observation ? '高完整度档案已记录，生物留在原栖地；可开启额外演化选择。' : '返航后可在科研中研究样本。'}`, { speciesId: species.id, entityId: entity.id, x: entity.x, y: entity.y, sampleCondition, nonInvasive: Boolean(observation) });
     } else {
       const amount = Math.ceil((entity.amount ?? 2) * miningMultiplier);
       this.cargo.push({ material: 'alloy', count: 1, weight: 1, amount });
@@ -331,12 +478,12 @@ export class Game {
     const cost = this.vehicle === 'ray' ? 4 : 8;
     if (this.battery < cost) { this.emit('warning', '声呐电量不足', '返回港口即可补充电量。'); return false; }
     this.battery -= cost;
-    this.sonar.duration = this.vehicle === 'ray' ? 8 : 4;
+    this.sonar.duration = (this.vehicle === 'ray' ? 8 : 4) + (this.bioModuleEffect.sonarDuration ?? 0);
     this.sonar.remaining = this.sonar.duration;
     this.sonar.radius = this.vehicle === 'ray' ? 1150 : 650;
     this.sonar.origin = { x: this.player.x, y: this.player.y };
     this.sonar.waveRadius = 0;
-    this.sonar.cooldown = this.researched.includes('echo') ? 6 : 12;
+    this.sonar.cooldown = (this.researched.includes('echo') ? 6 : 12) * (this.bioModuleEffect.sonarCooldownMultiplier ?? 1);
     let found = 0;
     for (const entity of this.entities) {
       if (entity.alive && Math.hypot(entity.x - this.player.x, entity.y - this.player.y) <= this.sonar.radius) {
@@ -345,7 +492,7 @@ export class Game {
       }
     }
     const contactRadius = this.vehicle === 'ray' ? 3000 : 2000;
-    for (const hotspot of HOTSPOTS) {
+    for (const hotspot of this.hotspots) {
       if (Math.hypot(hotspot.x - this.player.x, hotspot.y - this.player.y) <= contactRadius) this.detectedHotspots[hotspot.id] = this.elapsed + (this.vehicle === 'ray' ? 35 : 22);
     }
     const waypoint = this.contacts.find(contact => contact.y > this.player.y + 100) ?? this.contacts[0];
@@ -363,18 +510,41 @@ export class Game {
       this.abilityCooldowns.moth = 10;
       this.emit('ability', '窄域冲刺', '2 秒高机动推进。岩壁会阻挡冲刺，请沿洞喉进入。');
     } else if (this.vehicle === 'ray') {
-      const targets = this.entities.filter(entity => entity.alive && entity.type === 'creature' && !entity.caveId && !entity.biologicalScan && Math.hypot(entity.x - this.player.x, entity.y - this.player.y) <= 320 && hasLineOfSight(this.player.x, this.player.y, entity.x, entity.y))
-        .sort((a, b) => Math.hypot(a.x - this.player.x, a.y - this.player.y) - Math.hypot(b.x - this.player.x, b.y - this.player.y)).slice(0, 3);
-      if (!targets.length) { this.emit('info', '扫描范围内没有新样本', '靠近生物群落，断层扫描可标记 320 米内的生物。'); return false; }
+      const candidates = this.entities.filter(entity => entity.alive && !entity.sampled && entity.type === 'creature' && !entity.caveId && (entity.surveyUntil ?? 0) <= this.elapsed && Math.hypot(entity.x - this.player.x, entity.y - this.player.y) <= 1150 && this.isEntityVisible(entity))
+        .sort((a, b) => Number(this.discoveries.includes(a.speciesId)) - Number(this.discoveries.includes(b.speciesId)) || Math.hypot(a.x - this.player.x, a.y - this.player.y) - Math.hypot(b.x - this.player.x, b.y - this.player.y));
+      const targets = [];
+      const selectedSpecies = new Set();
+      for (const entity of candidates) {
+        if (selectedSpecies.has(entity.speciesId)) continue;
+        targets.push(entity);
+        selectedSpecies.add(entity.speciesId);
+        if (targets.length === 5) break;
+      }
+      for (const entity of candidates) {
+        if (targets.length === 5) break;
+        if (!targets.includes(entity)) targets.push(entity);
+      }
+      if (!targets.length) { this.emit('info', '尚无可观测的活体目标', '先按 Q 声呐探测，再按 V 锁定；1150 米内的已探明活体可远距观测。已记录的个体本航次不会重复取样。'); return false; }
       this.battery -= cost;
       this.abilityCooldowns.ray = 12;
       for (const entity of targets) {
         entity.biologicalScan = true;
         entity.sampleCondition = 'scanned';
         entity.researchBonus = Math.ceil(speciesById[entity.speciesId].research * 0.65);
-        entity.scannedUntil = this.elapsed + 16;
+        entity.surveyUntil = this.elapsed + 18;
+        entity.scannedUntil = Math.max(entity.scannedUntil ?? 0, entity.surveyUntil);
+        if (!entity.ecologyRecorded) {
+          const previous = this.observations[entity.speciesId];
+          this.observations[entity.speciesId] = {
+            count: (previous?.count ?? 0) + 1,
+            firstDepth: previous?.firstDepth ?? Math.round(entity.y),
+            lastDepth: Math.round(entity.y),
+            behavior: speciesById[entity.speciesId].behavior ?? 'cruise',
+          };
+          entity.ecologyRecorded = true;
+        }
       }
-      this.emit('ability', '生物断层扫描完成', `${targets.length} 份高精度样本已标记。采集后可获得额外科研点。`);
+      this.emit('ability', '活体谱系已锁定', `${selectedSpecies.size} 种、${targets.length} 个活体已记录生态行为。18 秒内按 E 远距取得高完整度档案；无需追逐或带走生物。`, { observedSpecies: [...selectedSpecies], targets: targets.map(entity => entity.id) });
     } else {
       const targets = this.entities.filter(entity => entity.alive && entity.type === 'mineral' && !entity.caveId && entity.attachment && this.isEntityVisible(entity) && Math.hypot(entity.x - this.player.x, entity.y - this.player.y) <= 210)
         .sort((a, b) => Math.hypot(a.x - this.player.x, a.y - this.player.y) - Math.hypot(b.x - this.player.x, b.y - this.player.y)).slice(0, Math.min(3, Math.floor(this.stats.cargo - this.cargoWeight)));
@@ -473,6 +643,7 @@ export class Game {
       if (!item || !speciesById[item.speciesId]) continue;
       const count = Number.isFinite(item.count) ? clamp(Math.floor(item.count), 0, 1000) : 1;
       this.sampleStock[item.speciesId] = (this.sampleStock[item.speciesId] ?? 0) + count;
+      if (item.fidelity === true || item.sampleCondition === 'scanned') this.sampleFidelity[item.speciesId] = (this.sampleFidelity[item.speciesId] ?? 0) + count;
     }
   }
 
@@ -543,7 +714,7 @@ export class Game {
     const gene = GENES.find(item => item.id === id);
     if (!gene || this.researched.includes(id)) return false;
     if (!this.discoveries.includes(gene.speciesId)) { this.emit('info', '尚未取得研究样本', `先采集一份${speciesById[gene.speciesId].name}。`); return false; }
-    if (this.resources.research < gene.cost) { this.emit('warning', '科研点不足', `需要 ${gene.cost} 科研点。返回基地，在科研值班中处理样本可获得更多。`); return false; }
+    if (this.resources.research < gene.cost) { this.emit('warning', '科研点不足', `需要 ${gene.cost} 科研点。返回基地，在共鸣演化舱中培育模块可获得更多。`); return false; }
     this.resources.research -= gene.cost;
     this.researched.push(id);
     this.addXp(70);
@@ -639,7 +810,9 @@ export class Game {
       totalCaptures: this.totalCaptures, totalDives: this.totalDives, totalAlloy: this.totalAlloy,
       captureCounts: this.captureCounts, collectionTier: this.collectionTier, missionTiers: this.missionTiers,
       wonderIds: this.wonders.filter(wonder => wonder.discovered).map(wonder => wonder.id), carrier: this.carrier,
-      sampleStock: this.sampleStock, labState: this.labState, labProcessed: this.labProcessed,
+      sampleStock: this.sampleStock, sampleFidelity: this.sampleFidelity, observations: this.observations,
+      bioModules: this.bioModules, equippedBioModule: this.equippedBioModule,
+      labState: this.labState, labProcessed: this.labProcessed,
       labRuns: this.labRuns, labBestCombo: this.labBestCombo, caveDiscoveries: this.caveDiscoveries,
       unlockedPaints: this.unlockedPaints, paintByVehicle: this.paintByVehicle,
     };
@@ -675,10 +848,29 @@ export class Game {
       this.captureCounts = {};
       for (const species of SPECIES) this.captureCounts[species.id] = Math.floor(finite(data.captureCounts?.[species.id], 0));
       this.sampleStock = {};
+      this.sampleFidelity = {};
+      this.observations = {};
       for (const species of SPECIES) {
         const count = Math.floor(finite(data.sampleStock?.[species.id], 0, 0, 100000));
         if (count) this.sampleStock[species.id] = count;
+        const fidelity = Math.floor(finite(data.sampleFidelity?.[species.id], 0, 0, count));
+        if (fidelity) this.sampleFidelity[species.id] = fidelity;
+        const observation = data.observations?.[species.id];
+        if (observation && typeof observation === 'object' && finite(observation.count, 0) > 0) {
+          this.observations[species.id] = {
+            count: Math.floor(finite(observation.count, 0, 0, 100000)),
+            firstDepth: finite(observation.firstDepth, 0, 0, 11000),
+            lastDepth: finite(observation.lastDepth, 0, 0, 11000),
+            behavior: species.behavior ?? 'cruise',
+          };
+        }
       }
+      this.bioModules = {};
+      for (const module of BIO_MODULES) {
+        const level = Math.floor(finite(data.bioModules?.[module.id], 0, 0, 3));
+        if (level) this.bioModules[module.id] = level;
+      }
+      this.equippedBioModule = this.bioModules[data.equippedBioModule] > 0 ? data.equippedBioModule : null;
       this.labState = data.labState && typeof data.labState === 'object' && !Array.isArray(data.labState) ? JSON.parse(JSON.stringify(data.labState)) : null;
       this.labProcessed = Math.floor(finite(data.labProcessed, 0));
       this.labRuns = Math.floor(finite(data.labRuns, 0));

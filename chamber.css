@@ -1,0 +1,199 @@
+.chamber-intro {
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:20px;
+  margin:12px 0;
+}
+.chamber-intro p { color:#95b4b7; font-size:11px; margin:7px 0 0; }
+.chamber-mode { color:#b4c9bd; font-size:10px; white-space:nowrap; }
+.chamber-callout {
+  display:flex;
+  justify-content:space-between;
+  align-items:center;
+  padding:12px 16px;
+  background:#302f27;
+  border:1px solid #756c49;
+  margin-bottom:12px;
+  font-size:11px;
+}
+.chamber-layout { display:grid; grid-template-columns:1fr 1fr; gap:18px; }
+.circuit-panel, .evolution-panel {
+  border:1px solid #35545c;
+  border-radius:7px;
+  background:#112731;
+  padding:14px;
+  min-width:0;
+}
+.circuit-top { display:flex; justify-content:space-between; gap:12px; align-items:center; margin-bottom:10px; }
+.circuit-top strong { font-size:11px; color:#bbd8d2; font-weight:500; }
+.circuit-top>span { color:#91b5a4; font:10px var(--mono); }
+.circuit-surface {
+  position:relative;
+  width:min(100%, 335px);
+  margin:0 auto;
+  border:1px solid #345d5a;
+  background:radial-gradient(ellipse at center,#23483d,#091c26 72%);
+  border-radius:8px;
+  overflow:hidden;
+}
+.circuit-grid { display:grid; grid-template-columns:repeat(5,minmax(0,1fr)); grid-template-rows:repeat(5,minmax(0,1fr)); aspect-ratio:1; gap:3px; padding:5px; }
+.circuit-cell {
+  position:relative;
+  min-width:0;
+  background:#102b34;
+  border:1px solid #284752;
+  border-radius:5px;
+  color:#829f9e;
+}
+.link-cell { cursor:pointer; overflow:hidden; }
+.link-cell:disabled { opacity:1; cursor:default; }
+.link-cell:not(:disabled):hover { background:#2b4c49; border-color:#a0d7bf; }
+.link-cell:focus-visible { outline:2px solid #edd394; outline-offset:-3px; }
+.circuit-wire { display:block; position:absolute; background:#547178; transition:background .2s; }
+.wire-1, .wire-4 { width:7px; left:calc(50% - 3.5px); height:50%; }
+.wire-1 { top:0; }
+.wire-4 { bottom:0; }
+.wire-2, .wire-8 { height:7px; top:calc(50% - 3.5px); width:50%; }
+.wire-2 { right:0; }
+.wire-8 { left:0; }
+.cell-nucleus { position:absolute; width:14px; height:14px; top:calc(50% - 7px); left:calc(50% - 7px); background:#6c9290; border:3px solid #294047; transform:rotate(45deg); }
+.powered.link-cell { background:#1c3d38; border-color:#4b7d65; }
+.powered .circuit-wire { background:#93d7b2; box-shadow:0 0 8px #91dfb62a; }
+.powered .cell-nucleus { background:#cdf3c9; }
+.core-cell { display:flex; flex-direction:column; align-items:center; justify-content:center; background:#374339; border-color:#c4ac71; color:#f4dba1; box-shadow:0 0 30px #f4dba11a; z-index:1; }
+.core-cell>span { font-size:26px; line-height:1; }
+.core-cell>b { font-size:8px; font-weight:500; margin:2px 0; }
+.core-cell>small { font:10px var(--mono); }
+.terminal-cell { display:flex; flex-direction:column; justify-content:center; align-items:center; gap:3px; color:var(--organ-color); border-color:color-mix(in srgb,var(--organ-color) 35%,#22313d); background:#1c2e36; }
+.terminal-cell>b { font-size:21px; line-height:1; }
+.terminal-cell>span { font-size:8px; }
+.terminal-cell>small { font:8px var(--mono); white-space:nowrap; }
+.terminal-cell.powered { border-color:var(--organ-color); box-shadow:inset 0 0 17px color-mix(in srgb,var(--organ-color) 20%,transparent); }
+.pulse-canvas { position:absolute; inset:0; width:100%; height:100%; pointer-events:none; z-index:2; image-rendering:pixelated; }
+.circuit-idle { position:absolute; inset:0; background:#061923d9; backdrop-filter:blur(2px); display:flex; flex-direction:column; justify-content:center; align-items:center; z-index:3; }
+.circuit-idle>span { color:#a6d6bb; font-size:50px; margin-bottom:12px; }
+.circuit-idle>strong { font-size:17px; font-weight:500; letter-spacing:2px; }
+.circuit-idle>p { font-size:10px; color:#90adb2; }
+.circuit-controls { display:flex; justify-content:center; align-items:center; gap:8px; margin-top:12px; }
+.circuit-controls .filter-chip { padding:8px 10px; font-size:9px; }
+.circuit-controls .primary-button { padding:10px 13px; font-size:10px; }
+.circuit-controls button:disabled { cursor:default; opacity:.4; }
+.circuit-instruction { margin:10px 0 0; font-size:9px; line-height:1.7; text-align:center; color:#819da5; }
+.evolution-heading { display:flex; justify-content:space-between; align-items:center; gap:12px; margin:2px 0 12px; }
+.evolution-heading h2 { font-size:15px; font-weight:500; margin:0; }
+.evolution-heading>span { color:#8ba5a7; font-size:8px; }
+.organ-options { display:grid; gap:7px; }
+.organ-card { display:flex; align-items:center; width:100%; text-align:left; gap:12px; border:1px solid #304a55; border-radius:5px; background:#10252e; color:#b1c6c4; padding:8px 12px; }
+.organ-card:disabled { opacity:1; cursor:default; }
+.organ-card:not(:disabled):hover { background:#2b493e; border-color:var(--organ-color); }
+.organ-card.receiving { border-color:color-mix(in srgb,var(--organ-color) 55%,#263f47); background:linear-gradient(100deg,#233b39,#112833); }
+.organ-card>b { font-size:25px; color:var(--organ-color); width:30px; text-align:center; }
+.organ-card>span:nth-child(2) { flex:1; min-width:0; }
+.organ-card strong { font-size:11px; font-weight:500; display:block; line-height:1.2; }
+.organ-card strong>em { font:9px var(--mono); color:var(--organ-color); margin-left:9px; }
+.organ-card small { display:block; font-size:8px; color:#82a4aa; margin-top:4px; line-height:1.2; }
+.organ-charge { display:block; height:3px; background:#28434a; margin-top:7px; }
+.organ-charge>u { display:block; background:var(--organ-color); height:100%; text-decoration:none; }
+.organ-numbers { text-align:right; min-width:55px; }
+.organ-numbers>strong { font:17px var(--mono); color:var(--organ-color); }
+.organ-numbers>small { font-size:8px; }
+.mutation-options { display:grid; gap:10px; }
+.mutation-card { display:flex; align-items:center; gap:14px; width:100%; padding:17px 14px; border:1px solid #4d6662; border-radius:6px; background:linear-gradient(125deg,#2b3f3c,#132d39); text-align:left; }
+.mutation-card:hover { border-color:var(--organ-color); transform:translateX(3px); }
+.mutation-card:disabled { opacity:.5; }
+.mutation-card>b { font-size:30px; color:var(--organ-color); width:36px; text-align:center; }
+.mutation-card strong { font-size:13px; font-weight:500; color:var(--organ-color); display:block; margin-bottom:7px; }
+.mutation-card small { font-size:10px; line-height:1.7; color:#a6bdbd; display:block; }
+.mutation-card>i { font-size:20px; margin-left:auto; color:#789f9f; font-style:normal; }
+.mutation-history { display:flex; flex-wrap:wrap; gap:6px; margin-top:10px; }
+.mutation-history>span { font-size:9px; padding:5px 7px; border:1px solid #4b5b56; background:#2d3a30; color:#d0cca1; border-radius:3px; }
+.donor-strip { display:flex; gap:8px; margin-top:13px; }
+.donor-strip>span { display:grid; flex:1; grid-template-columns:46px 1fr; align-items:center; padding:5px; background:#1a343c; border:1px solid #34505a; border-radius:4px; min-width:0; }
+.donor-strip canvas { width:46px; height:34px; image-rendering:pixelated; grid-row:1/3; }
+.donor-strip b { font-size:8px; font-weight:500; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.donor-strip small { font-size:7px; color:#87b6a9; line-height:1.4; }
+.donor-strip>p { font-size:10px; line-height:1.9; color:#91adb0; margin:0; }
+.chamber-traits { display:flex; flex-wrap:wrap; gap:8px; font-size:8px; margin:10px 0; }
+.evolution-panel>.text-button { font-size:9px; margin-top:5px; padding:0; }
+.chamber-message { padding:9px 13px; margin:10px 0; font-size:10px; color:#bdd7c9; border-left:2px solid #a1d4ad; background:#203a3455; line-height:1.7; }
+.specimen-heading { margin:18px 0 12px; }
+.specimen-heading h2 { font-size:15px; }
+.specimen-heading p { font-size:10px; }
+.specimen-heading>span { font-size:9px; }
+.chamber-inventory { display:flex; gap:9px; overflow-x:auto; padding-bottom:7px; scrollbar-color:#446b65 #102530; }
+.genome-sample { display:flex; align-items:center; gap:9px; flex:0 0 208px; border:1px solid #3b5558; border-radius:5px; background:#152d34; text-align:left; padding:9px; color:#d3e3d8; }
+.genome-sample:disabled { opacity:.45; cursor:default; }
+.genome-sample:not(:disabled):hover { background:#2b493f; border-color:#a4cfb1; }
+.genome-sample canvas { width:55px; height:43px; image-rendering:pixelated; }
+.genome-sample>span { flex:1; }
+.genome-sample strong { font-size:10px; font-weight:500; display:block; }
+.genome-sample small { font-size:8px; color:#91aeb6; display:block; margin-top:5px; }
+.genome-sample em { font-size:8px; color:#c5cba5; display:block; margin-top:4px; font-style:normal; }
+.genome-sample>b { color:#a4d8c0; font:11px var(--mono); }
+.empty-genomes { border:1px dashed #37535b; padding:13px 18px; display:flex; align-items:center; justify-content:space-between; gap:20px; width:100%; color:#8daab1; font-size:10px; }
+.module-locker { margin-top:22px; }
+.module-locker .section-heading h2 { font-size:16px; }
+.module-locker-grid { display:grid; grid-template-columns:repeat(5,1fr); gap:9px; }
+.module-card { display:flex; text-align:left; align-items:center; padding:12px 9px; gap:8px; border:1px solid #36505a; background:#122932; border-radius:5px; }
+.module-card>b { font-size:24px; color:var(--organ-color); }
+.module-card>span { flex:1; }
+.module-card strong { font-weight:500; font-size:10px; display:block; }
+.module-card small { font-size:8px; color:#90afb2; line-height:1.6; display:block; margin-top:5px; }
+.module-card>em { font-size:7px; color:#9ab6aa; font-style:normal; }
+.module-card.equipped { border-color:#a0c9a6; background:#254236; }
+.module-card:disabled { opacity:.45; }
+.chamber-result { display:flex; align-items:center; gap:20px; border:1px solid var(--organ-color); background:linear-gradient(115deg,#364435,#152d39); padding:17px 24px; margin-bottom:15px; border-radius:7px; }
+.result-glyph { font-size:42px; color:var(--organ-color); }
+.chamber-result small { font-size:9px; color:#abc8b9; }
+.chamber-result h2 { font-size:20px; font-weight:500; margin:6px 0; color:var(--organ-color); }
+.chamber-result p { font-size:11px; color:#c7d6b8; margin:0; }
+.chamber-result .primary-button { margin-left:auto; }
+.taxonomy-line { font-size:9px; color:#8aadb6; line-height:1.7; margin:7px 0; }
+.scientific-name { font:italic 12px Georgia,serif; color:#b9cbbf; }
+.taxonomy-facts { display:grid; grid-template-columns:1fr 1fr; gap:12px; border:1px solid #34515a; padding:15px; margin:16px 0; }
+.taxonomy-facts>div { display:flex; flex-direction:column; gap:5px; font-size:9px; color:#83a3ac; }
+.taxonomy-facts b { font-size:11px; font-weight:400; color:#c5d7d3; line-height:1.7; }
+.taxonomy-filters { display:flex; gap:7px; flex-wrap:wrap; margin:12px 0 22px; }
+.taxonomy-filters .filter-chip { font-size:9px; padding:7px 10px; }
+.specimen-ecology { font-size:11px; color:#a8bfbe; line-height:1.9; }
+.observation-badge { display:inline-block; padding:4px 6px; background:#34334b; color:#cbbbed; font-size:8px; border-radius:3px; }
+.ray-guidance { color:#d3bde8!important; }
+@media (max-width:1000px) {
+  .chamber-layout { grid-template-columns:1fr 1fr; gap:12px; }
+  .circuit-panel, .evolution-panel { padding:11px; }
+  .circuit-top { flex-direction:column; align-items:flex-start; gap:6px; }
+  .organ-card { gap:8px; padding:9px; }
+  .organ-card>b { width:23px; font-size:22px; }
+  .organ-card strong { font-size:10px; }
+  .organ-card small { font-size:7px; }
+  .organ-numbers { min-width:42px; }
+  .donor-strip { flex-wrap:wrap; }
+  .donor-strip>span { flex-basis:calc(50% - 8px); }
+  .circuit-controls { flex-wrap:wrap; }
+  .module-locker-grid { grid-template-columns:repeat(3,1fr); }
+}
+@media (max-width:650px) {
+  .chamber-intro { align-items:flex-start; gap:10px; }
+  .chamber-intro p { font-size:9px; line-height:1.8; }
+  .chamber-mode { font-size:8px; padding-top:3px; }
+  .chamber-layout { grid-template-columns:1fr; }
+  .circuit-top { flex-direction:row; align-items:center; }
+  .circuit-surface { width:min(100%,335px); }
+  .evolution-heading>span { font-size:8px; }
+  .organ-options { grid-template-columns:1fr; }
+  .organ-card { padding:10px 12px; }
+  .organ-card strong { font-size:12px; }
+  .organ-card small { font-size:9px; }
+  .donor-strip { flex-wrap:nowrap; }
+  .donor-strip>span { flex-basis:auto; }
+  .mutation-card { padding:15px; }
+  .specimen-heading { flex-direction:column; align-items:flex-start; gap:7px; }
+  .module-locker-grid { grid-template-columns:1fr 1fr; }
+  .chamber-result { flex-wrap:wrap; padding:15px; gap:12px; }
+  .chamber-result h2 { font-size:18px; }
+  .chamber-result .primary-button { width:100%; }
+  .taxonomy-facts { grid-template-columns:1fr; }
+  .chamber-callout { font-size:9px; gap:10px; }
+  .chamber-callout .primary-button { font-size:10px; padding:10px; }
+}
